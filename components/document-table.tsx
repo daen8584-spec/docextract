@@ -1,20 +1,12 @@
-import { desc } from "drizzle-orm";
 import Link from "next/link";
-import { connection } from "next/server";
-import { db } from "@/db";
-import { documents } from "@/db/schema";
+import type { SessionUser } from "@/lib/auth";
+import { listDocuments } from "@/lib/documents";
 import { StatusBadge } from "./status-badge";
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 16).replace("T", " ");
 
-export async function DocumentTable() {
-  await connection();
-
-  const rows = await db
-    .select({ id: documents.id, filename: documents.filename, status: documents.status, createdAt: documents.createdAt })
-    .from(documents)
-    .orderBy(desc(documents.createdAt))
-    .limit(50);
+export async function DocumentTable({ user }: { user: SessionUser }) {
+  const rows = await listDocuments(user);
 
   if (rows.length === 0) {
     return <p className="text-sm text-zinc-500">No documents yet. Upload one to get started.</p>;
@@ -38,7 +30,9 @@ export async function DocumentTable() {
                   {doc.filename}
                 </Link>
               </td>
-              <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
+              <td className="px-4 py-3">
+                <StatusBadge status={doc.status} />
+              </td>
               <td className="px-4 py-3 text-zinc-600">{formatDate(doc.createdAt)}</td>
             </tr>
           ))}

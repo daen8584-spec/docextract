@@ -2,9 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import type { DocumentStatus } from "@/db/schema";
+import { apiErrorMessage } from "@/lib/api-client";
 import type { InvoiceFields } from "@/lib/extract";
 
-type Status = "pending" | "extracted" | "approved" | "rejected";
+type Status = DocumentStatus;
 
 const FIELDS = [
   { key: "vendor", label: "Vendor", type: "text" },
@@ -30,7 +32,22 @@ function toFields(form: HTMLFormElement): InvoiceFields {
   };
 }
 
-export function ReviewPanel({ id, status, fields }: { id: string; status: Status; fields: InvoiceFields | null }) {
+type Props = { id: string; status: Status; fields: InvoiceFields | null; canReview: boolean };
+
+function ReadOnlyFields({ fields }: { fields: InvoiceFields | null }) {
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
+      {FIELDS.map((field) => (
+        <div key={field.key} className="contents">
+          <dt className="font-medium text-zinc-500">{field.label}</dt>
+          <dd className="text-zinc-900">{fields?.[field.key] ?? "Not present"}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function ReviewPanel({ id, status, fields, canReview }: Props) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,11 +59,7 @@ export function ReviewPanel({ id, status, fields }: { id: string; status: Status
     setPending(false);
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      const detail = body.issues
-        ?.map((i: { path: string[]; message: string }) => `${i.path.join(".")}: ${i.message}`)
-        .join("; ");
-      setError([body.error ?? `Request failed (HTTP ${res.status})`, detail].filter(Boolean).join(". "));
+      setError(await apiErrorMessage(res));
       return;
     }
     router.refresh();
@@ -66,6 +79,19 @@ export function ReviewPanel({ id, status, fields }: { id: string; status: Status
 
   const button = "rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50";
   const errorMessage = error && <p role="alert" className="text-sm text-red-600">{error}</p>;
+
+  if (status === "pending" && !canReview) {
+    return <p className="text-sm text-zinc-600">Waiting for a reviewer to run extraction.</p>;
+  }
+
+  if (status === "extracted" && !canReview) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-zinc-600">Awaiting review.</p>
+        <ReadOnlyFields fields={fields} />
+      </div>
+    );
+  }
 
   if (status === "pending") {
     return (
@@ -117,14 +143,5 @@ export function ReviewPanel({ id, status, fields }: { id: string; status: Status
     );
   }
 
-  return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-      {FIELDS.map((field) => (
-        <div key={field.key} className="contents">
-          <dt className="font-medium text-zinc-500">{field.label}</dt>
-          <dd className="text-zinc-900">{fields?.[field.key] ?? "Not present"}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <ReadOnlyFields fields={fields} />;
 }

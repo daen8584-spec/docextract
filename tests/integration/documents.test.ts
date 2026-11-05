@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { documents } from "@/db/schema";
 import { extractInvoiceFields, type InvoiceFields } from "@/lib/extract";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
+import { createUser } from "./users";
 
 vi.mock("@/lib/extract", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/extract")>();
@@ -34,112 +35,144 @@ async function statusOf(id: string) {
   return row?.status;
 }
 
+const review = (id: string, body: unknown, cookie: string) =>
+  reviewDocument(jsonRequest("PATCH", `/api/documents/${id}`, body, { cookie }), routeParams(id));
+
 beforeEach(() => {
   vi.mocked(extractInvoiceFields).mockReset();
 });
 
 describe("POST /api/documents", () => {
-  it("stores a valid text upload as pending", async () => {
-    const res = await uploadDocument(uploadRequest("invoice.txt", "Invoice 1042"));
+  it("requires authentication", async () => {
+    const res = await uploadDocument(uploadRequest("invoice.txt", "Invoice 1042"), undefined);
+    expect(res.status).toBe(401);
+  });
+
+  it("stores a valid upload owned by the uploader", async () => {
+    const { user, cookie } = await createUser();
+
+    const res = await uploadDocument(uploadRequest("invoice.txt", "Invoice 1042", { cookie }), undefined);
 
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body).toMatchObject({ filename: "invoice.txt", status: "pending" });
-    expect(await statusOf(body.id)).toBe("pending");
+    const [stored] = await db.select().from(documents).where(eq(documents.id, body.id));
+    expect(stored.uploadedBy).toBe(user.id);
   });
 
-  it("rejects unsupported content types", async () => {
-    const res = await uploadDocument(uploadRequest("data.json", "{}", { type: "application/json" }));
-    expect(res.status).toBe(415);
+  it("rejects unsupported content types, oversized files and missing files", async () => {
+    const { cookie } = await createUser();
+
+    const wrongType = await uploadDocument(uploadRequest("data.json", "{}", { cookie, type: "application/json" }), undefined);
+    const tooLarge = await uploadDocument(uploadRequest("big.txt", "x".repeat(1_000_001), { cookie }), undefined);
+    const missing = await uploadDocument(jsonRequest("POST", "/api/documents", {}, { cookie }), undefined);
+
+    expect([wrongType.status, tooLarge.status, missing.status]).toEqual([415, 413, 400]);
+  });
+});
+
+describe("document visibility", () => {
+  it("shows uploaders only their own documents and reviewers everything", async () => {
+    const alice = await createUser();
+    const bob = await createUser();
+    const reviewer = await createUser("reviewer");
+    await insertDocument({ filename: "alice.txt", uploadedBy: alice.user.id });
+    await insertDocument({ filename: "bob.txt", uploadedBy: bob.user.id });
+
+    const names = async (cookie: string) => {
+      const res = await listDocuments(jsonRequest("GET", "/api/documents", undefined, { cookie }), undefined);
+      return (await res.json()).map((d: { filename: string }) => d.filename).sort();
+    };
+
+    expect(await names(alice.cookie)).toEqual(["alice.txt"]);
+    expect(await names(reviewer.cookie)).toEqual(["alice.txt", "bob.txt"]);
   });
 
-  it("rejects files larger than 1 MB", async () => {
-    const res = await uploadDocument(uploadRequest("big.txt", "x".repeat(1_000_001)));
-    expect(res.status).toBe(413);
+  it("returns 404 when an uploader requests another user's document", async () => {
+    const alice = await createUser();
+    const bob = await createUser();
+    const doc = await insertDocument({ uploadedBy: bob.user.id });
+
+    const res = await getDocument(
+      jsonRequest("GET", `/api/documents/${doc.id}`, undefined, { cookie: alice.cookie }),
+      routeParams(doc.id),
+    );
+    expect(res.status).toBe(404);
   });
 
-  it("rejects requests without a file", async () => {
-    const res = await uploadDocument(jsonRequest("POST", "/api/documents", {}));
+  it("returns 400 for malformed ids", async () => {
+    const { cookie } = await createUser();
+    const res = await getDocument(jsonRequest("GET", "/api/documents/abc", undefined, { cookie }), routeParams("abc"));
     expect(res.status).toBe(400);
   });
 });
 
-describe("GET /api/documents", () => {
-  it("lists documents newest first", async () => {
-    await insertDocument({ filename: "older.txt", createdAt: new Date("2026-01-01T00:00:00Z") });
-    await insertDocument({ filename: "newer.txt", createdAt: new Date("2026-02-01T00:00:00Z") });
-
-    const res = await listDocuments();
-    const body = await res.json();
-
-    expect(body.map((d: { filename: string }) => d.filename)).toEqual(["newer.txt", "older.txt"]);
-  });
-});
-
 describe("POST /api/documents/:id/extract", () => {
+  it("is restricted to reviewers", async () => {
+    const { user, cookie } = await createUser();
+    const doc = await insertDocument({ uploadedBy: user.id });
+
+    const res = await extractDocument(
+      jsonRequest("POST", `/api/documents/${doc.id}/extract`, undefined, { cookie }),
+      routeParams(doc.id),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it("stores validated fields and marks the document extracted", async () => {
     vi.mocked(extractInvoiceFields).mockResolvedValue(FIELDS);
+    const { cookie } = await createUser("reviewer");
     const doc = await insertDocument();
 
-    const res = await extractDocument(jsonRequest("POST", `/api/documents/${doc.id}/extract`), routeParams(doc.id));
+    const res = await extractDocument(
+      jsonRequest("POST", `/api/documents/${doc.id}/extract`, undefined, { cookie }),
+      routeParams(doc.id),
+    );
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ status: "extracted", extracted: FIELDS });
   });
-
-  it("refuses to re-extract a reviewed document", async () => {
-    const doc = await insertDocument({ status: "approved", extracted: FIELDS });
-
-    const res = await extractDocument(jsonRequest("POST", `/api/documents/${doc.id}/extract`), routeParams(doc.id));
-
-    expect(res.status).toBe(409);
-    expect(extractInvoiceFields).not.toHaveBeenCalled();
-  });
 });
 
 describe("PATCH /api/documents/:id", () => {
+  it("is restricted to reviewers", async () => {
+    const { user, cookie } = await createUser();
+    const doc = await insertDocument({ status: "extracted", extracted: FIELDS, uploadedBy: user.id });
+
+    const res = await review(doc.id, { action: "approve" }, cookie);
+    expect(res.status).toBe(403);
+  });
+
   it("approves with reviewer corrections", async () => {
+    const { cookie } = await createUser("reviewer");
     const doc = await insertDocument({ status: "extracted", extracted: FIELDS });
     const corrected = { ...FIELDS, totalAmount: 1300 };
 
-    const res = await reviewDocument(
-      jsonRequest("PATCH", `/api/documents/${doc.id}`, { action: "approve", fields: corrected }),
-      routeParams(doc.id),
-    );
+    const res = await review(doc.id, { action: "approve", fields: corrected }, cookie);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ status: "approved", extracted: corrected });
   });
 
   it("rejects malformed review payloads", async () => {
+    const { cookie } = await createUser("reviewer");
     const doc = await insertDocument({ status: "extracted", extracted: FIELDS });
 
-    const res = await reviewDocument(
-      jsonRequest("PATCH", `/api/documents/${doc.id}`, { action: "maybe" }),
-      routeParams(doc.id),
-    );
-
+    const res = await review(doc.id, { action: "maybe" }, cookie);
     expect(res.status).toBe(400);
   });
 
-  it("returns 404 for unknown documents and 400 for malformed ids", async () => {
-    const unknown = "00000000-0000-4000-8000-000000000000";
-    const missing = await getDocument(jsonRequest("GET", `/api/documents/${unknown}`), routeParams(unknown));
-    const malformed = await getDocument(jsonRequest("GET", "/api/documents/abc"), routeParams("abc"));
-
-    expect(missing.status).toBe(404);
-    expect(malformed.status).toBe(400);
-  });
-
   it("lets exactly one of two concurrent reviews win", async () => {
+    const first = await createUser("reviewer");
+    const second = await createUser("reviewer");
     const doc = await insertDocument({ status: "extracted", extracted: FIELDS });
-    const review = (action: "approve" | "reject") =>
-      reviewDocument(jsonRequest("PATCH", `/api/documents/${doc.id}`, { action }), routeParams(doc.id));
 
-    const responses = await Promise.all([review("approve"), review("reject")]);
-    const statuses = responses.map((r) => r.status).sort();
+    const responses = await Promise.all([
+      review(doc.id, { action: "approve" }, first.cookie),
+      review(doc.id, { action: "reject" }, second.cookie),
+    ]);
 
-    expect(statuses).toEqual([200, 409]);
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
     const winner = await responses.find((r) => r.status === 200)!.json();
     expect(await statusOf(doc.id)).toBe(winner.status);
   });

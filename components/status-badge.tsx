@@ -1,6 +1,4 @@
-import { documentStatus } from "@/db/schema";
-
-type Status = (typeof documentStatus.enumValues)[number];
+import type { DocumentStatus as Status } from "@/db/schema";
 
 const STYLES: Record<Status, string> = {
   pending: "bg-zinc-100 text-zinc-700",

@@ -1,41 +1,21 @@
-import { desc } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { documents } from "@/db/schema";
+import { requireUser } from "@/lib/auth";
+import { createDocument, listDocuments } from "@/lib/documents";
+import { AppError } from "@/lib/errors";
+import { handle } from "@/lib/http";
 
-const MAX_BYTES = 1_000_000;
-const ALLOWED_TYPES = new Set(["text/plain"]);
-
-const summary = {
-  id: documents.id,
-  filename: documents.filename,
-  status: documents.status,
-  createdAt: documents.createdAt,
-};
-
-export async function POST(request: Request) {
+export const POST = handle(async (request: Request) => {
+  const user = await requireUser(request);
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
-
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Expected multipart field 'file'" }, { status: 400 });
-  }
-  if (!ALLOWED_TYPES.has(file.type)) {
-    return NextResponse.json({ error: `Unsupported type: ${file.type || "unknown"}` }, { status: 415 });
-  }
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "File exceeds 1 MB" }, { status: 413 });
+    throw new AppError("BAD_REQUEST", "Expected multipart field 'file'");
   }
 
-  const [doc] = await db
-    .insert(documents)
-    .values({ filename: file.name, mimeType: file.type, content: await file.text() })
-    .returning(summary);
+  return NextResponse.json(await createDocument(user, file), { status: 201 });
+});
 
-  return NextResponse.json(doc, { status: 201 });
-}
-
-export async function GET() {
-  const rows = await db.select(summary).from(documents).orderBy(desc(documents.createdAt)).limit(50);
-  return NextResponse.json(rows);
-}
+export const GET = handle(async (request: Request) => {
+  const user = await requireUser(request);
+  return NextResponse.json(await listDocuments(user));
+});

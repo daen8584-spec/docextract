@@ -12,7 +12,8 @@
     "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit",
     "test:unit": "vitest run --project unit",
-    "test:integration": "vitest run --project integration"
+    "test:integration": "vitest run --project integration",
+    "user:role": "tsx scripts/set-role.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
@@ -32,6 +33,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.5",
     "tailwindcss": "^4",
+    "tsx": "^4.20.0",
     "typescript": "^5",
     "vitest": "^5.1.0"
   }

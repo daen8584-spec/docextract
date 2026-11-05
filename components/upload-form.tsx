@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { apiErrorMessage } from "@/lib/api-client";
 
 export function UploadForm() {
   const router = useRouter();
@@ -18,8 +19,7 @@ export function UploadForm() {
     setPending(false);
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setError(body.error ?? `Upload failed (HTTP ${res.status})`);
+      setError(await apiErrorMessage(res));
       return;
     }
     form.reset();
