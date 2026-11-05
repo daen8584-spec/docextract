@@ -13,7 +13,7 @@ DocExtract treats model output as untrusted input. Every response is validated a
 - **Audit log** of every state change, including who changed what and the reviewer's corrections
 - **Evaluation harness** reporting per-field accuracy, missing values and hallucinations across a test dataset
 - **Observability** through structured JSON logs, request ids, and LLM latency and token usage per extraction
-- **Tested end to end** with unit tests and integration tests against a real PostgreSQL database in CI
+- **Tested** with unit tests and with integration tests that run the API route handlers and the worker against a real PostgreSQL database in CI
 
 ## Architecture
 
@@ -66,20 +66,20 @@ Significant decisions are documented as [Architecture Decision Records](docs/adr
 | `reviewer` | Yes | All | Yes | Yes |
 | `admin` | Yes | All | Yes | Yes |
 
-New accounts are uploaders. Promote a user with `npm run user:role -- user@example.com reviewer`.
+New accounts are uploaders. Promote a user with `npm run user:role -- user@example.com reviewer`. The `admin` role currently has the same permissions as `reviewer` and is reserved for future administrative features.
 
 ## API
 
-All endpoints except sign-up and login require a session cookie. Errors are returned as `{"error": "...", "details": ...}` with an `x-request-id` header for correlation with the logs.
+Document endpoints and `/api/auth/me` require a session cookie. Errors are returned as `{"error": "...", "details": ...}` with an `x-request-id` header for correlation with the logs.
 
 | Method | Path | Access | Description |
 | --- | --- | --- | --- |
-| `POST` | `/api/auth/signup` | Public | Create an account and start a session |
+| `POST` | `/api/auth/signup` | Public | Create an uploader account (password of at least 12 characters) and start a session |
 | `POST` | `/api/auth/login` | Public | Start a session |
-| `POST` | `/api/auth/logout` | Authenticated | End the session |
+| `POST` | `/api/auth/logout` | Public | End the current session, if any, and clear the cookie |
 | `GET` | `/api/auth/me` | Authenticated | Current user |
 | `POST` | `/api/documents` | Authenticated | Upload a text document (`multipart/form-data`, field `file`, max 1 MB) and queue extraction |
-| `GET` | `/api/documents` | Authenticated | List visible documents, newest first |
+| `GET` | `/api/documents` | Authenticated | List up to 50 visible documents, newest first |
 | `GET` | `/api/documents/:id` | Authenticated | Document with its extracted fields |
 | `GET` | `/api/documents/:id/events` | Authenticated | Audit history of the document |
 | `POST` | `/api/documents/:id/extract` | Reviewer | Queue a new extraction attempt (`202 Accepted`) |
@@ -94,11 +94,16 @@ git clone https://github.com/daen8584-spec/docextract.git
 cd docextract
 npm install
 cp .env.example .env
+```
+
+Edit `.env`: set `DATABASE_URL` to your PostgreSQL connection string and `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_MODEL` to your provider. Then create the database and apply the migrations:
+
+```bash
 createdb docextract
 npm run db:migrate
 ```
 
-Set `DATABASE_URL` and the `LLM_*` variables in `.env`, then start the web application and the worker in separate terminals:
+Start the web application and the worker in separate terminals:
 
 ```bash
 npm run dev
@@ -115,6 +120,8 @@ createdb docextract_test
 npm run test:integration
 ```
 
+The integration tests use `TEST_DATABASE_URL`, which defaults to `DATABASE_URL` with the database name changed to `docextract_test`. They refuse to run against the same database as `DATABASE_URL`, because they truncate every table.
+
 Unit tests cover the extraction client, scoring and field diffing with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
 
 ## Evaluating extraction quality
@@ -124,7 +131,7 @@ npm run eval
 npm run eval -- --min-accuracy 0.95
 ```
 
-The harness runs every case in `eval/cases` through the extraction pipeline and reports exact-match rate and per-field accuracy, separating incorrect values, missing values and hallucinated values. The dataset covers line items with tax, European and Chilean number formats, written-out dates, currency symbols, receipts without invoice numbers and documents with distracting reference numbers. With `--min-accuracy` the command exits non-zero below the threshold, so it can gate prompt or model changes.
+The harness runs every case in `eval/cases` through the extraction pipeline and reports exact-match rate and per-field accuracy, separating incorrect values, missing values and hallucinated values. The dataset covers line items with tax, European and Chilean number formats, written-out dates, currency symbols, receipts without invoice numbers and documents with distracting reference numbers. With `--min-accuracy` the command exits non-zero when field accuracy falls below the threshold, so it can gate prompt or model changes. Full results for each run are written to `eval/results/`, which is not committed.
 
 Reviewed documents can be turned into new cases:
 
@@ -132,7 +139,7 @@ Reviewed documents can be turned into new cases:
 npm run eval:export
 ```
 
-This exports approved documents whose fields the reviewer corrected, using the approved values as ground truth. Exported files contain real document content and should be reviewed before they are committed.
+This exports approved documents whose fields the reviewer corrected, using the approved values as ground truth. Add `-- --all` to export every approved document. Exported files contain real document content and should be reviewed before they are committed.
 
 ## Observability
 

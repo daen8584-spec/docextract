@@ -22,7 +22,7 @@ A third-party authentication library was considered. For this scope it would add
 
 ## Consequences
 
-- The full authentication path is about two hundred lines that can be read and tested end to end.
+- The full authentication path is a few hundred lines that can be read in one sitting and is covered by integration tests.
 - Sessions can be revoked instantly by deleting rows.
 - Every authenticated request performs one indexed database lookup.
 - Additional factors, OAuth or rate limiting on login would need to be built or would justify adopting a dedicated library. Rate limiting is listed on the roadmap.

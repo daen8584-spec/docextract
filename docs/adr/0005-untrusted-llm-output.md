@@ -9,7 +9,7 @@ Language models produce plausible output that is sometimes wrong: invalid JSON, 
 
 ## Decision
 
-- **Schema validation.** Every response is parsed and validated with Zod (`lib/extract.ts`). Malformed JSON, wrong types, invalid ISO dates and currency codes are rejected with a descriptive error and the attempt is retried by the job queue.
+- **Schema validation.** Every response is parsed and validated with Zod (`lib/extract.ts`). Malformed JSON, wrong types, invalid ISO 8601 dates and currency values that are not three-letter codes are rejected with a descriptive error and the attempt is retried by the job queue.
 - **Human review.** Extracted fields are a draft. Nothing is final until a reviewer approves it, optionally with corrections. Approved and rejected documents are immutable.
 - **Recorded corrections.** Each approval stores a field-level diff between the model output and the approved values in the audit log. These corrections show where the model is weak.
 - **Measured quality.** An evaluation harness (`npm run eval`) runs a fixed dataset through the extraction pipeline and reports per-field accuracy, separating incorrect, missing and hallucinated values. Reviewed documents can be exported into the dataset (`npm run eval:export`), so production corrections become regression cases.
