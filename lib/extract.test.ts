@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ExtractionError, extractInvoiceFields } from "./extract";
+import { ExtractionError, extractInvoice } from "./extract";
 
 const validFields = {
   vendor: "Acme Supplies",
@@ -9,10 +9,10 @@ const validFields = {
   dueDate: "2026-12-01",
 };
 
-const llmReply = (content: string, status = 200) =>
-  new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status });
+const llmReply = (content: string, status = 200, extra: Record<string, unknown> = {}) =>
+  new Response(JSON.stringify({ choices: [{ message: { content } }], ...extra }), { status });
 
-describe("extractInvoiceFields", () => {
+describe("extractInvoice", () => {
   beforeEach(() => {
     vi.stubEnv("LLM_BASE_URL", "https://llm.test/v1");
     vi.stubEnv("LLM_MODEL", "test-model");
@@ -28,7 +28,10 @@ describe("extractInvoiceFields", () => {
     const fetchMock = vi.fn().mockResolvedValue(llmReply(JSON.stringify(validFields)));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(extractInvoiceFields("Invoice 1042")).resolves.toEqual(validFields);
+    const result = await extractInvoice("Invoice 1042");
+    expect(result.fields).toEqual(validFields);
+    expect(result.model).toBe("test-model");
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://llm.test/v1/chat/completions");
@@ -40,32 +43,45 @@ describe("extractInvoiceFields", () => {
     const partial = { ...validFields, dueDate: null, currency: null };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(llmReply(JSON.stringify(partial))));
 
-    await expect(extractInvoiceFields("Invoice 1042")).resolves.toEqual(partial);
+    await expect(extractInvoice("Invoice 1042")).resolves.toMatchObject({ fields: partial });
+  });
+
+  it("reports the model and token usage returned by the provider", async () => {
+    const reply = llmReply(JSON.stringify(validFields), 200, {
+      model: "provider-model-v2",
+      usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply));
+
+    await expect(extractInvoice("Invoice 1042")).resolves.toMatchObject({
+      model: "provider-model-v2",
+      usage: { promptTokens: 120, completionTokens: 40, totalTokens: 160 },
+    });
   });
 
   it("rejects responses that fail schema validation", async () => {
     const invalid = { ...validFields, dueDate: "Dec 1, 2026" };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(llmReply(JSON.stringify(invalid))));
 
-    await expect(extractInvoiceFields("x")).rejects.toThrow(/dueDate/);
+    await expect(extractInvoice("x")).rejects.toThrow(/dueDate/);
   });
 
   it("rejects non-JSON model output", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(llmReply("Sure! Here are the fields:")));
 
-    await expect(extractInvoiceFields("x")).rejects.toThrow("not valid JSON");
+    await expect(extractInvoice("x")).rejects.toThrow("not valid JSON");
   });
 
   it("surfaces upstream HTTP errors", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(llmReply("", 429)));
 
-    await expect(extractInvoiceFields("x")).rejects.toThrow("HTTP 429");
+    await expect(extractInvoice("x")).rejects.toThrow("HTTP 429");
   });
 
   it("wraps network failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
 
-    await expect(extractInvoiceFields("x")).rejects.toBeInstanceOf(ExtractionError);
+    await expect(extractInvoice("x")).rejects.toBeInstanceOf(ExtractionError);
   });
 
   it("fails fast when the provider is not configured", async () => {
@@ -73,7 +89,7 @@ describe("extractInvoiceFields", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(extractInvoiceFields("x")).rejects.toThrow("must be set");
+    await expect(extractInvoice("x")).rejects.toThrow("must be set");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,7 @@ import { db } from "../db";
 import { documentEvents, documents, users } from "../db/schema";
 import { isReviewer, type SessionUser } from "./auth";
 import { AppError } from "./errors";
-import { ExtractionError, extractInvoiceFields, type InvoiceFields, invoiceFields } from "./extract";
+import { ExtractionError, extractInvoice, type ExtractionResult, type InvoiceFields, invoiceFields } from "./extract";
 import { diffFields } from "./fields";
 
 export const MAX_UPLOAD_BYTES = 1_000_000;
@@ -100,9 +100,9 @@ export async function extractDocument(user: SessionUser, id: string) {
     throw new AppError("CONFLICT", `Document already ${doc.status}`);
   }
 
-  let fields: InvoiceFields;
+  let result: ExtractionResult;
   try {
-    fields = await extractInvoiceFields(doc.content);
+    result = await extractInvoice(doc.content);
   } catch (error) {
     if (!(error instanceof ExtractionError)) throw error;
     await db.insert(documentEvents).values({
@@ -119,7 +119,7 @@ export async function extractDocument(user: SessionUser, id: string) {
   return db.transaction(async (tx) => {
     const [updated] = await tx
       .update(documents)
-      .set({ status: "extracted", extracted: fields })
+      .set({ status: "extracted", extracted: result.fields })
       .where(and(eq(documents.id, id), inArray(documents.status, ["pending", "extracted"])))
       .returning(resultColumns);
     if (!updated) throw new AppError("CONFLICT", "Document was reviewed during extraction");
@@ -130,6 +130,7 @@ export async function extractDocument(user: SessionUser, id: string) {
       type: "extraction_succeeded",
       fromStatus: doc.status,
       toStatus: "extracted",
+      data: { model: result.model, latencyMs: result.latencyMs, usage: result.usage },
     });
     return updated;
   });

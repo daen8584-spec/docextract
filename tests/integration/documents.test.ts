@@ -5,13 +5,13 @@ import { GET as getDocument, PATCH as reviewDocument } from "@/app/api/documents
 import { GET as listDocuments, POST as uploadDocument } from "@/app/api/documents/route";
 import { db } from "@/db";
 import { documents } from "@/db/schema";
-import { extractInvoiceFields, type InvoiceFields } from "@/lib/extract";
+import { extractInvoice, type InvoiceFields } from "@/lib/extract";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
 import { createUser } from "./users";
 
 vi.mock("@/lib/extract", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/extract")>();
-  return { ...actual, extractInvoiceFields: vi.fn() };
+  return { ...actual, extractInvoice: vi.fn() };
 });
 
 const FIELDS: InvoiceFields = {
@@ -39,7 +39,7 @@ const review = (id: string, body: unknown, cookie: string) =>
   reviewDocument(jsonRequest("PATCH", `/api/documents/${id}`, body, { cookie }), routeParams(id));
 
 beforeEach(() => {
-  vi.mocked(extractInvoiceFields).mockReset();
+  vi.mocked(extractInvoice).mockReset();
 });
 
 describe("POST /api/documents", () => {
@@ -120,7 +120,7 @@ describe("POST /api/documents/:id/extract", () => {
   });
 
   it("stores validated fields and marks the document extracted", async () => {
-    vi.mocked(extractInvoiceFields).mockResolvedValue(FIELDS);
+    vi.mocked(extractInvoice).mockResolvedValue({ fields: FIELDS, model: "test-model", latencyMs: 12, usage: null });
     const { cookie } = await createUser("reviewer");
     const doc = await insertDocument();
 

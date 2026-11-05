@@ -18,6 +18,7 @@ export default defineConfig({
           name: "unit",
           environment: "node",
           include: ["lib/**/*.test.ts"],
+          env: { LOG_LEVEL: "silent" },
         },
       },
       {

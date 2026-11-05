@@ -24,10 +24,21 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
 
 function EventDetails({ data }: { data: unknown }) {
   if (!data || typeof data !== "object") return null;
-  const { corrections, error } = data as { corrections?: FieldCorrection[]; error?: string };
+  const { corrections, error, model, latencyMs, usage } = data as {
+    corrections?: FieldCorrection[];
+    error?: string;
+    model?: string;
+    latencyMs?: number;
+    usage?: { totalTokens: number } | null;
+  };
 
   return (
     <>
+      {model && (
+        <p className="text-xs text-zinc-600">
+          {model} in {latencyMs} ms{usage ? `, ${usage.totalTokens} tokens` : ""}
+        </p>
+      )}
       {corrections?.map((c) => (
         <p key={c.field} className="text-xs text-zinc-600">
           {FIELD_LABELS[c.field]} corrected from {formatValue(c.from)} to {formatValue(c.to)}
