@@ -1,0 +1,8 @@
+Corner Bakery
+123 Main Street
+
+2 x Croissant        7.00
+1 x Coffee           3.50
+TOTAL USD           10.50
+
+Paid by card. Thank you!

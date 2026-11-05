@@ -1,0 +1,11 @@
+NORTHWIND TRADING LLC
+INVOICE #NW-20931
+Issue date: 2026-10-02    Due date: 2026-11-01
+
+Item                     Qty   Unit price   Amount
+Office chairs              4       210.00   840.00
+Standing desk              1       560.00   560.00
+
+Subtotal                                  1,400.00
+Sales tax (8.5%)                            119.00
+TOTAL DUE (USD)                           1,519.00

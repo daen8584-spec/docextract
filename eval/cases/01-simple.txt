@@ -1,0 +1,4 @@
+Invoice 1042
+Vendor: Acme Supplies
+Total: 1250.00 USD
+Due date: 2026-12-01

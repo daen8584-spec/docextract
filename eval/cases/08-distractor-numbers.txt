@@ -1,0 +1,10 @@
+Summit Logistics Inc.
+Purchase order: PO-55120
+Customer account: 004417
+Invoice number: SL-90012
+Shipment weight: 1,200 kg
+
+Freight charges           2,150.00
+Fuel surcharge              215.00
+Total payable (CAD)       2,365.00
+Due within 30 days, by 2026-12-15

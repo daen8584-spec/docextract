@@ -14,7 +14,9 @@
     "test:integration": "vitest run --project integration",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "user:role": "tsx scripts/set-role.ts"
+    "user:role": "tsx scripts/set-role.ts",
+    "eval": "tsx scripts/eval.ts",
+    "eval:export": "tsx scripts/export-reviewed.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
