@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareField, failedCase, scoreCase, summarize } from "./eval";
+import { compareField, distribution, failedCase, scoreCase, summarize } from "./eval";
 import type { InvoiceFields } from "./extract";
 
 const expected: InvoiceFields = {
@@ -58,5 +58,20 @@ describe("summarize", () => {
 
   it("handles an empty run", () => {
     expect(summarize([])).toMatchObject({ cases: 0, exactMatchRate: 0, fieldAccuracy: 0 });
+  });
+});
+
+describe("distribution", () => {
+  it("returns nearest-rank percentiles and the mean", () => {
+    const latencies = Array.from({ length: 20 }, (_, i) => (i + 1) * 100);
+    expect(distribution(latencies)).toEqual({ p50: 1000, p95: 1900, mean: 1050 });
+  });
+
+  it("does not depend on input order", () => {
+    expect(distribution([300, 100, 200])).toEqual(distribution([100, 200, 300]));
+  });
+
+  it("returns null for an empty sample", () => {
+    expect(distribution([])).toBe(null);
   });
 });

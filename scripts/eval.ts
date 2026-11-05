@@ -2,7 +2,7 @@ import "./load-env";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { type CaseResult, type EvalSummary, failedCase, scoreCase, summarize } from "../lib/eval";
+import { type CaseResult, type Distribution, distribution, type EvalSummary, failedCase, scoreCase, summarize } from "../lib/eval";
 import { extractInvoice, invoiceFields } from "../lib/extract";
 import { FIELD_KEYS, FIELD_LABELS } from "../lib/fields";
 
@@ -34,11 +34,22 @@ async function loadCases() {
   );
 }
 
-function report(model: string, summary: EvalSummary, results: CaseResult[]): string {
+type Performance = { latencyMs: Distribution | null; totalTokens: Distribution | null };
+
+function report(model: string, summary: EvalSummary, performance: Performance, results: CaseResult[]): string {
+  const { latencyMs, totalTokens } = performance;
   const lines = [
     `Model: ${model}`,
     `Cases: ${summary.cases}   Exact match: ${percent(summary.exactMatchRate)}   ` +
       `Field accuracy: ${percent(summary.fieldAccuracy)}   Extraction errors: ${summary.errors}`,
+  ];
+  if (latencyMs) {
+    lines.push(`Latency: p50 ${latencyMs.p50} ms, p95 ${latencyMs.p95} ms`);
+  }
+  if (totalTokens) {
+    lines.push(`Tokens per document: mean ${Math.round(totalTokens.mean)}, p95 ${totalTokens.p95}`);
+  }
+  lines.push(
     "",
     "| Field | Accuracy | Incorrect | Missing | Spurious |",
     "| --- | ---: | ---: | ---: | ---: |",
@@ -46,7 +57,7 @@ function report(model: string, summary: EvalSummary, results: CaseResult[]): str
       const f = summary.fields[field];
       return `| ${FIELD_LABELS[field]} | ${percent(f.accuracy)} | ${f.incorrect} | ${f.missing} | ${f.spurious} |`;
     }),
-  ];
+  );
 
   const failures = results.filter((r) => !r.exactMatch);
   if (failures.length > 0) {
@@ -66,6 +77,8 @@ async function main() {
   if (cases.length === 0) throw new Error(`No cases found in ${CASES_DIR}`);
 
   const results: CaseResult[] = [];
+  const latencies: number[] = [];
+  const tokens: number[] = [];
   let model = process.env.LLM_MODEL ?? "unknown";
 
   // Sequential on purpose: keeps provider rate limits and latency figures predictable.
@@ -73,6 +86,8 @@ async function main() {
     try {
       const extraction = await extractInvoice(testCase.content);
       model = extraction.model;
+      latencies.push(extraction.latencyMs);
+      if (extraction.usage) tokens.push(extraction.usage.totalTokens);
       results.push(scoreCase(testCase.id, testCase.expected, extraction.fields));
     } catch (error) {
       results.push(failedCase(testCase.id, error instanceof Error ? error.message : String(error)));
@@ -80,11 +95,12 @@ async function main() {
   }
 
   const summary = summarize(results);
-  console.log(report(model, summary, results));
+  const performance: Performance = { latencyMs: distribution(latencies), totalTokens: distribution(tokens) };
+  console.log(report(model, summary, performance, results));
 
   await mkdir(RESULTS_DIR, { recursive: true });
   const output = path.join(RESULTS_DIR, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-  await writeFile(output, JSON.stringify({ model, summary, results }, null, 2));
+  await writeFile(output, JSON.stringify({ model, summary, performance, results }, null, 2));
   console.log(`\nFull results written to ${output}`);
 
   const threshold = args["min-accuracy"] === undefined ? undefined : Number(args["min-accuracy"]);

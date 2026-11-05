@@ -55,6 +55,17 @@ export function failedCase(id: string, error: string): CaseResult {
 
 const ratio = (part: number, whole: number) => (whole === 0 ? 0 : part / whole);
 
+export type Distribution = { p50: number; p95: number; mean: number };
+
+/** Nearest-rank percentiles and the mean. Returns null for an empty sample. */
+export function distribution(values: number[]): Distribution | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const rank = (p: number) => sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)];
+  const mean = sorted.reduce((sum, v) => sum + v, 0) / sorted.length;
+  return { p50: rank(0.5), p95: rank(0.95), mean };
+}
+
 export function summarize(results: CaseResult[]): EvalSummary {
   const fields = Object.fromEntries(
     FIELD_KEYS.map((field) => {

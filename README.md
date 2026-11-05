@@ -141,6 +141,16 @@ npm run eval:export
 
 This exports approved documents whose fields the reviewer corrected, using the approved values as ground truth. Add `-- --all` to export every approved document. Exported files contain real document content and should be reviewed before they are committed.
 
+### Results
+
+Measured on 2026-11-05 through the Groq API, across all 20 cases:
+
+| Model | Exact match | Field accuracy | Hallucinated values | Latency p50 | Latency p95 | Tokens per document |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `openai/gpt-oss-20b` | 100% | 100% | 0 | 577 ms | 1,000 ms | 438 (mean) |
+
+The model extracted every field correctly, including the ten failure-mode cases. The dataset is synthetic and every case has a single unambiguous answer, so a perfect score shows that the pipeline handles these layouts. It does not establish accuracy on real documents. The dataset's main role is regression testing: a prompt, model or provider change should not lower this score. Accuracy on real documents is measured through reviewer corrections, which `npm run eval:export` turns into additional cases. Latency is measured at the client and includes the network round trip.
+
 ## Observability
 
 Logs are structured JSON on stdout. Every API request logs its method, path, status and duration under a request id, which is also returned in the `x-request-id` response header. Worker logs carry the job id and attempt number. Each successful extraction records the model, latency and token usage in the audit log.

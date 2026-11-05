@@ -15,7 +15,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "user:role": "tsx scripts/set-role.ts",
-    "eval": "tsx scripts/eval.ts",
+    "eval": "LOG_LEVEL=warn tsx scripts/eval.ts",
     "eval:export": "tsx scripts/export-reviewed.ts"
   },
   "dependencies": {
