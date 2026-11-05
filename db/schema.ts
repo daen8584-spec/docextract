@@ -5,6 +5,8 @@ export const documentStatus = pgEnum("document_status", ["pending", "extracted",
 export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().defaultRandom(),
   filename: text("filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  content: text("content").notNull(),
   status: documentStatus("status").notNull().default("pending"),
   extracted: jsonb("extracted"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
