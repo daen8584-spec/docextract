@@ -10,3 +10,4 @@ Each record captures one significant technical decision: the context, the choice
 | [0004](0004-session-authentication.md) | Server-side sessions with scrypt password hashing | Accepted |
 | [0005](0005-untrusted-llm-output.md) | Treat LLM output as untrusted input | Accepted |
 | [0006](0006-rate-limiting-in-postgresql.md) | Rate limit with token buckets in PostgreSQL | Accepted |
+| [0007](0007-pdf-text-extraction.md) | Extract the PDF text layer at upload time | Accepted |

@@ -9,7 +9,7 @@ function headers(options: RequestOptions, extra: Record<string, string> = {}): R
 
 export function uploadRequest(
   filename: string,
-  content: string,
+  content: string | Uint8Array<ArrayBuffer>,
   options: RequestOptions & { type?: string } = {},
 ): Request {
   const form = new FormData();

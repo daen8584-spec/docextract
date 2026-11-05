@@ -7,10 +7,14 @@ import { AppError } from "./errors";
 import { type InvoiceFields, invoiceFields } from "./extract";
 import { EXTRACTION_QUEUE } from "./extraction-job";
 import { diffFields } from "./fields";
+import { extractPdfText } from "./pdf";
 import { enqueue } from "./queue";
 
-export const MAX_UPLOAD_BYTES = 1_000_000;
-export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set(["text/plain"]);
+/** Accepted content types and their size limits in bytes. */
+export const UPLOAD_LIMITS: Readonly<Record<string, number>> = {
+  "text/plain": 1_000_000,
+  "application/pdf": 10_000_000,
+};
 
 export const reviewSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approve"), fields: invoiceFields.optional() }),
@@ -18,7 +22,13 @@ export const reviewSchema = z.discriminatedUnion("action", [
 ]);
 export type Review = z.infer<typeof reviewSchema>;
 
-type UploadedFile = { name: string; type: string; size: number; text(): Promise<string> };
+type UploadedFile = {
+  name: string;
+  type: string;
+  size: number;
+  text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+};
 
 const summaryColumns = {
   id: documents.id,
@@ -70,14 +80,24 @@ export async function listDocumentEvents(user: SessionUser, id: string) {
     .orderBy(asc(documentEvents.createdAt));
 }
 
+/** The document text: the file itself for plain text, the extracted text layer for PDFs. */
+async function readContent(file: UploadedFile): Promise<{ content: string; pages?: number }> {
+  if (file.type === "application/pdf") {
+    const { text, pages } = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+    return { content: text, pages };
+  }
+  return { content: await file.text() };
+}
+
 export async function createDocument(user: SessionUser, file: UploadedFile) {
-  if (!ALLOWED_MIME_TYPES.has(file.type)) {
-    throw new AppError("UNSUPPORTED_MEDIA_TYPE", `Unsupported type: ${file.type || "unknown"}`);
+  const limit = UPLOAD_LIMITS[file.type];
+  if (limit === undefined) {
+    throw new AppError("UNSUPPORTED_MEDIA_TYPE", `Unsupported type: ${file.type || "unknown"}. Upload a text file or a PDF.`);
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new AppError("PAYLOAD_TOO_LARGE", "File exceeds 1 MB");
+  if (file.size > limit) {
+    throw new AppError("PAYLOAD_TOO_LARGE", `File exceeds ${limit / 1_000_000} MB`);
   }
-  const content = await file.text();
+  const { content, pages } = await readContent(file);
 
   // The document, its audit event and its extraction job are created atomically,
   // so a document can never exist without the job that will process it.
@@ -92,7 +112,7 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
       actorId: user.id,
       type: "uploaded",
       toStatus: doc.status,
-      data: { filename: file.name, sizeBytes: file.size, jobId },
+      data: { filename: file.name, sizeBytes: file.size, jobId, ...(pages === undefined ? {} : { pages }) },
     });
     return doc;
   });

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/daen8584-spec/docextract/actions/workflows/ci.yml/badge.svg)](https://github.com/daen8584-spec/docextract/actions/workflows/ci.yml)
 
-Upload a document, extract structured fields with an LLM in the background, then have a reviewer verify, correct and approve the result before it is trusted.
+Upload a document (text or PDF), extract structured fields with an LLM in the background, then have a reviewer verify, correct and approve the result before it is trusted.
 
 DocExtract treats model output as untrusted input. Every response is validated against a schema, extraction runs on a retrying job queue, every state change is recorded in an audit log, and extraction quality is measured with an evaluation harness.
 
@@ -13,6 +13,7 @@ DocExtract treats model output as untrusted input. Every response is validated a
 - **Human review** with field-level corrections and atomic, race-free status transitions
 - **Authentication and authorization** with server-side sessions, three roles and object-level access control
 - **Rate limiting** of login, signup and upload with token buckets in PostgreSQL, consistent across instances
+- **PDF support** through the PDF.js text layer, with clear errors for scanned, damaged and oversized files
 - **Audit log** of every state change, including who changed what and the reviewer's corrections
 - **Evaluation harness** reporting per-field accuracy, missing values and hallucinations across a test dataset
 - **Observability** through structured JSON logs, request ids, and LLM latency and token usage per extraction
@@ -61,6 +62,7 @@ Significant decisions are documented as [Architecture Decision Records](docs/adr
 - [0004](docs/adr/0004-session-authentication.md) Server-side sessions with scrypt hashing and hashed session tokens
 - [0005](docs/adr/0005-untrusted-llm-output.md) Validation, human review and evaluation for LLM output
 - [0006](docs/adr/0006-rate-limiting-in-postgresql.md) Token bucket rate limiting in PostgreSQL
+- [0007](docs/adr/0007-pdf-text-extraction.md) PDF text extraction at upload time
 
 ## Roles
 
@@ -84,7 +86,7 @@ Login, signup and upload are rate limited (see [0006](docs/adr/0006-rate-limitin
 | `POST` | `/api/auth/login` | Public | Start a session |
 | `POST` | `/api/auth/logout` | Public | End the current session, if any, and clear the cookie |
 | `GET` | `/api/auth/me` | Authenticated | Current user |
-| `POST` | `/api/documents` | Authenticated | Upload a text document (`multipart/form-data`, field `file`, max 1 MB) and queue extraction |
+| `POST` | `/api/documents` | Authenticated | Upload a document (`multipart/form-data`, field `file`): plain text up to 1 MB or a PDF with a text layer up to 10 MB and 50 pages. Queues extraction |
 | `GET` | `/api/documents` | Authenticated | List up to 50 visible documents, newest first |
 | `GET` | `/api/documents/:id` | Authenticated | Document with its extracted fields |
 | `GET` | `/api/documents/:id/events` | Authenticated | Audit history of the document |
@@ -128,7 +130,7 @@ npm run test:integration
 
 The integration tests use `TEST_DATABASE_URL`, which defaults to `DATABASE_URL` with the database name changed to `docextract_test`. They refuse to run against the same database as `DATABASE_URL`, because they truncate every table.
 
-Unit tests cover the extraction client, scoring, field diffing and client address resolution with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, rate limits and their refill, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
+Unit tests cover the extraction client, scoring, field diffing, PDF text extraction and client address resolution with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, rate limits and their refill, PDF uploads, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
 
 ## Evaluating extraction quality
 
@@ -177,7 +179,7 @@ worker/         Background worker entry point
 
 ## Roadmap
 
-- PDF support with text extraction
+- OCR for scanned PDFs
 - Confidence scores and highlighting of uncertain fields
 - `LISTEN/NOTIFY` to start jobs without polling delay
 

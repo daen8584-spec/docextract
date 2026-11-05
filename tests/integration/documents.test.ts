@@ -6,6 +6,7 @@ import { GET as listDocuments, POST as uploadDocument } from "@/app/api/document
 import { db } from "@/db";
 import { documents, jobs } from "@/db/schema";
 import type { InvoiceFields } from "@/lib/extract";
+import { makePdf } from "../fixtures/pdf";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
 import { createUser } from "./users";
 
@@ -63,6 +64,33 @@ describe("POST /api/documents", () => {
     const missing = await uploadDocument(jsonRequest("POST", "/api/documents", {}, { cookie }), undefined);
 
     expect([wrongType.status, tooLarge.status, missing.status]).toEqual([415, 413, 400]);
+  });
+
+  it("stores the text layer of an uploaded PDF", async () => {
+    const { cookie } = await createUser();
+    const pdf = makePdf([["INVOICE INV-2042", "Vendor: Acme Supplies"], ["Total due: 1,250.00 USD"]]);
+
+    const res = await uploadDocument(uploadRequest("invoice.pdf", pdf, { cookie, type: "application/pdf" }), undefined);
+
+    expect(res.status).toBe(201);
+    const [stored] = await db.select().from(documents).where(eq(documents.id, (await res.json()).id));
+    expect(stored.mimeType).toBe("application/pdf");
+    expect(stored.content).toContain("INV-2042");
+    expect(stored.content).toContain("1,250.00 USD");
+    expect(await db.select().from(jobs)).toHaveLength(1);
+  });
+
+  it("rejects PDFs that are fake, scanned or damaged without storing anything", async () => {
+    const { cookie } = await createUser();
+    const upload = (content: string | Uint8Array<ArrayBuffer>) =>
+      uploadDocument(uploadRequest("doc.pdf", content, { cookie, type: "application/pdf" }), undefined);
+
+    const fake = await upload("Invoice 1042");
+    const scanned = await upload(makePdf([[]]));
+    const damaged = await upload("%PDF-1.4 truncated");
+
+    expect([fake.status, scanned.status, damaged.status]).toEqual([415, 422, 422]);
+    expect(await db.select().from(documents)).toHaveLength(0);
   });
 });
 
