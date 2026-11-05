@@ -1,34 +1,49 @@
 # DocExtract
 
-Upload a document, extract structured fields with an LLM, then have a person review, correct and approve the result before it is trusted.
+Upload a document, extract structured fields with an LLM in the background, then have a reviewer verify, correct and approve the result before it is trusted.
 
-## Why
+DocExtract treats model output as untrusted input. Every response is validated against a schema, extraction runs on a retrying job queue, every state change is recorded in an audit log, and extraction quality is measured with an evaluation harness.
 
-LLMs are good at reading unstructured documents but they are not always right. DocExtract treats model output as a draft: every response is validated against a schema, and nothing is final until a reviewer approves it.
+## Features
+
+- **Background extraction** on a PostgreSQL-backed job queue with retries, exponential backoff, deduplication and crash recovery
+- **Schema-validated LLM output** with any OpenAI-compatible provider (Groq, OpenRouter, LiteLLM, a local llama.cpp server)
+- **Human review** with field-level corrections and atomic, race-free status transitions
+- **Authentication and authorization** with server-side sessions, three roles and object-level access control
+- **Audit log** of every state change, including who changed what and the reviewer's corrections
+- **Evaluation harness** reporting per-field accuracy, missing values and hallucinations across a test dataset
+- **Observability** through structured JSON logs, request ids, and LLM latency and token usage per extraction
+- **Tested end to end** with unit tests and integration tests against a real PostgreSQL database in CI
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  R[Reviewer] -->|upload| UI[Next.js UI]
-  UI -->|POST /api/documents| API[Route handlers]
-  API -->|insert pending| DB[(PostgreSQL)]
-  UI -->|POST /api/documents/:id/extract| API
-  API -->|chat completion, JSON mode| LLM[OpenAI-compatible LLM]
+  U[Uploader] -->|upload| API[Next.js route handlers]
+  R[Reviewer] -->|review| API
+  API -->|document + event + job, one transaction| DB[(PostgreSQL)]
+  W[Worker] -->|claim job: FOR UPDATE SKIP LOCKED| DB
+  W -->|chat completion, JSON mode| LLM[OpenAI-compatible LLM]
   LLM --> V{Zod validation}
-  V -->|valid| DB
-  V -->|invalid| E[502 with reason]
-  UI -->|PATCH approve or reject| API
+  V -->|valid| W
+  V -->|invalid: retry with backoff| W
+  W -->|fields + event| DB
 ```
 
-Each document moves through a strict lifecycle:
+The web application and the worker are separate processes that share only the database. Uploading a document inserts the document, its audit event and its extraction job in a single transaction, so a document can never exist without the job that processes it.
+
+Each document moves through this lifecycle:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> pending: upload
-  pending --> extracted: extract
-  extracted --> extracted: re-extract
-  extracted --> approved: approve with optional corrections
+  [*] --> queued: upload
+  queued --> processing: worker claims job
+  processing --> extracted: valid output
+  processing --> queued: attempt failed, retry scheduled
+  processing --> failed: attempts exhausted
+  failed --> queued: reviewer retries
+  extracted --> queued: reviewer re-runs extraction
+  extracted --> approved: approve, optionally with corrections
   extracted --> rejected: reject
   approved --> [*]
   rejected --> [*]
@@ -36,29 +51,43 @@ stateDiagram-v2
 
 ## Design decisions
 
-- **Model output is untrusted input.** Responses are parsed and validated with Zod before they reach the database. Malformed JSON, wrong types or invalid dates return a `502` with the exact reason instead of storing bad data.
-- **Atomic status transitions.** Reviews update with `WHERE status = 'extracted'`, so two reviewers acting at the same time cannot overwrite each other. The second one gets a `409`.
-- **Provider-agnostic LLM client.** Any OpenAI-compatible endpoint works (Groq, OpenRouter, LiteLLM, a local llama.cpp server) by changing three environment variables. No SDK lock-in.
-- **Human in the loop.** Reviewers can correct any field before approving. Approved and rejected documents are immutable.
-- **Server components with streaming.** Pages render a static shell and stream database content through Suspense (Next.js Cache Components and Partial Prerendering).
+Significant decisions are documented as [Architecture Decision Records](docs/adr/README.md):
 
-## Tech stack
+- [0002](docs/adr/0002-drizzle-orm.md) Drizzle ORM for typed queries, SQL migrations and raw SQL where needed
+- [0003](docs/adr/0003-postgresql-job-queue.md) A job queue in PostgreSQL for transactional enqueueing without extra infrastructure
+- [0004](docs/adr/0004-session-authentication.md) Server-side sessions with scrypt hashing and hashed session tokens
+- [0005](docs/adr/0005-untrusted-llm-output.md) Validation, human review and evaluation for LLM output
 
-TypeScript, Next.js 16 (App Router), React, Tailwind CSS, PostgreSQL, Drizzle ORM, Zod, Vitest, GitHub Actions.
+## Roles
+
+| Role | Upload | View documents | Run extraction | Approve or reject |
+| --- | --- | --- | --- | --- |
+| `uploader` | Yes | Own documents only | No | No |
+| `reviewer` | Yes | All | Yes | Yes |
+| `admin` | Yes | All | Yes | Yes |
+
+New accounts are uploaders. Promote a user with `npm run user:role -- user@example.com reviewer`.
 
 ## API
 
-| Method | Path | Description |
-| --- | --- | --- |
-| `POST` | `/api/documents` | Upload a text document (`multipart/form-data`, field `file`, max 1 MB) |
-| `GET` | `/api/documents` | List the 50 most recent documents |
-| `GET` | `/api/documents/:id` | Get a document with its extracted fields |
-| `POST` | `/api/documents/:id/extract` | Run LLM extraction on a pending or extracted document |
-| `PATCH` | `/api/documents/:id` | Review with `{"action":"approve","fields":{...}}` or `{"action":"reject"}` |
+All endpoints except sign-up and login require a session cookie. Errors are returned as `{"error": "...", "details": ...}` with an `x-request-id` header for correlation with the logs.
+
+| Method | Path | Access | Description |
+| --- | --- | --- | --- |
+| `POST` | `/api/auth/signup` | Public | Create an account and start a session |
+| `POST` | `/api/auth/login` | Public | Start a session |
+| `POST` | `/api/auth/logout` | Authenticated | End the session |
+| `GET` | `/api/auth/me` | Authenticated | Current user |
+| `POST` | `/api/documents` | Authenticated | Upload a text document (`multipart/form-data`, field `file`, max 1 MB) and queue extraction |
+| `GET` | `/api/documents` | Authenticated | List visible documents, newest first |
+| `GET` | `/api/documents/:id` | Authenticated | Document with its extracted fields |
+| `GET` | `/api/documents/:id/events` | Authenticated | Audit history of the document |
+| `POST` | `/api/documents/:id/extract` | Reviewer | Queue a new extraction attempt (`202 Accepted`) |
+| `PATCH` | `/api/documents/:id` | Reviewer | `{"action":"approve","fields":{...}}` or `{"action":"reject"}` |
 
 ## Running locally
 
-Requirements: Node.js 22+, PostgreSQL 15+, and an API key for any OpenAI-compatible provider.
+Requirements: Node.js 22 or later, PostgreSQL 15 or later, and an API key for any OpenAI-compatible provider.
 
 ```bash
 git clone https://github.com/daen8584-spec/docextract.git
@@ -67,22 +96,65 @@ npm install
 cp .env.example .env
 createdb docextract
 npm run db:migrate
-npm run dev
 ```
 
-Set `DATABASE_URL` and the `LLM_*` variables in `.env`, then open http://localhost:3000 and upload `fixtures/sample-invoice.txt`.
+Set `DATABASE_URL` and the `LLM_*` variables in `.env`, then start the web application and the worker in separate terminals:
+
+```bash
+npm run dev
+npm run worker
+```
+
+Open http://localhost:3000, create an account, promote it with `npm run user:role -- <email> reviewer`, and upload `eval/cases/01-simple.txt`.
 
 ## Testing
 
 ```bash
-npm test
+npm run test:unit
+createdb docextract_test
+npm run test:integration
 ```
 
-Unit tests cover the extraction client: successful parsing, missing fields, schema violations, non-JSON output, upstream HTTP errors, network failures and missing configuration. The LLM is mocked, so tests need no network or API key. CI runs lint, type checking, tests and a production build on every push.
+Unit tests cover the extraction client, scoring and field diffing with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
+
+## Evaluating extraction quality
+
+```bash
+npm run eval
+npm run eval -- --min-accuracy 0.95
+```
+
+The harness runs every case in `eval/cases` through the extraction pipeline and reports exact-match rate and per-field accuracy, separating incorrect values, missing values and hallucinated values. The dataset covers line items with tax, European and Chilean number formats, written-out dates, currency symbols, receipts without invoice numbers and documents with distracting reference numbers. With `--min-accuracy` the command exits non-zero below the threshold, so it can gate prompt or model changes.
+
+Reviewed documents can be turned into new cases:
+
+```bash
+npm run eval:export
+```
+
+This exports approved documents whose fields the reviewer corrected, using the approved values as ground truth. Exported files contain real document content and should be reviewed before they are committed.
+
+## Observability
+
+Logs are structured JSON on stdout. Every API request logs its method, path, status and duration under a request id, which is also returned in the `x-request-id` response header. Worker logs carry the job id and attempt number. Each successful extraction records the model, latency and token usage in the audit log.
+
+## Project structure
+
+```
+app/            Next.js pages and API route handlers
+components/     React components
+db/             Schema and SQL migrations
+docs/adr/       Architecture Decision Records
+eval/cases/     Evaluation dataset
+lib/            Domain logic: auth, documents, extraction, queue, worker, evaluation
+scripts/        Command-line tools (roles, evaluation)
+tests/          Integration tests
+worker/         Background worker entry point
+```
 
 ## Roadmap
 
 - PDF support with text extraction
+- Rate limiting on login and upload
 - Confidence scores and highlighting of uncertain fields
-- Audit log of reviewer corrections, usable as an evaluation set for prompt changes
-- Authentication and per-user review queues
+- `LISTEN/NOTIFY` to start jobs without polling delay
