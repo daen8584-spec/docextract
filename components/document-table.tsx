@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { SessionUser } from "@/lib/auth";
 import { listDocuments } from "@/lib/documents";
-import { StatusBadge } from "./status-badge";
+import { AutoRefresh } from "./auto-refresh";
+import { isInProgress, StatusBadge } from "./status-badge";
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 16).replace("T", " ");
 
@@ -14,6 +15,7 @@ export async function DocumentTable({ user }: { user: SessionUser }) {
 
   return (
     <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
+      {rows.some((doc) => isInProgress(doc.status)) && <AutoRefresh />}
       <table className="w-full text-left text-sm">
         <thead className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
           <tr>

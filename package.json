@@ -4,15 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
+    "worker": "tsx worker/index.ts",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "user:role": "tsx scripts/set-role.ts"
   },
   "dependencies": {

@@ -1,11 +1,13 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import { documentEvents, documents, users } from "../db/schema";
 import { isReviewer, type SessionUser } from "./auth";
 import { AppError } from "./errors";
-import { ExtractionError, extractInvoice, type ExtractionResult, type InvoiceFields, invoiceFields } from "./extract";
+import { type InvoiceFields, invoiceFields } from "./extract";
+import { EXTRACTION_QUEUE } from "./extraction-job";
 import { diffFields } from "./fields";
+import { enqueue } from "./queue";
 
 export const MAX_UPLOAD_BYTES = 1_000_000;
 export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set(["text/plain"]);
@@ -77,60 +79,55 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
   }
   const content = await file.text();
 
+  // The document, its audit event and its extraction job are created atomically,
+  // so a document can never exist without the job that will process it.
   return db.transaction(async (tx) => {
     const [doc] = await tx
       .insert(documents)
       .values({ filename: file.name, mimeType: file.type, content, uploadedBy: user.id })
       .returning(summaryColumns);
+    const jobId = await enqueue(tx, EXTRACTION_QUEUE, { documentId: doc.id }, { dedupeKey: doc.id });
     await tx.insert(documentEvents).values({
       documentId: doc.id,
       actorId: user.id,
       type: "uploaded",
       toStatus: doc.status,
-      data: { filename: file.name, sizeBytes: file.size },
+      data: { filename: file.name, sizeBytes: file.size, jobId },
     });
     return doc;
   });
 }
 
-export async function extractDocument(user: SessionUser, id: string) {
-  const [doc] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
-  if (!doc) throw new AppError("NOT_FOUND", "Document not found");
-  if (doc.status === "approved" || doc.status === "rejected") {
-    throw new AppError("CONFLICT", `Document already ${doc.status}`);
-  }
-
-  let result: ExtractionResult;
-  try {
-    result = await extractInvoice(doc.content);
-  } catch (error) {
-    if (!(error instanceof ExtractionError)) throw error;
-    await db.insert(documentEvents).values({
-      documentId: id,
-      actorId: user.id,
-      type: "extraction_failed",
-      fromStatus: doc.status,
-      toStatus: doc.status,
-      data: { error: error.message },
-    });
-    throw new AppError("BAD_GATEWAY", error.message);
-  }
-
+/** Queues a new extraction attempt for a document that failed or needs re-extraction. */
+export async function requestExtraction(user: SessionUser, id: string) {
   return db.transaction(async (tx) => {
+    const [doc] = await tx
+      .select({ status: documents.status })
+      .from(documents)
+      .where(eq(documents.id, id))
+      .limit(1)
+      .for("update");
+    if (!doc) throw new AppError("NOT_FOUND", "Document not found");
+    if (doc.status === "queued" || doc.status === "processing") {
+      throw new AppError("CONFLICT", "Extraction is already in progress");
+    }
+    if (doc.status === "approved" || doc.status === "rejected") {
+      throw new AppError("CONFLICT", `Document already ${doc.status}`);
+    }
+
     const [updated] = await tx
       .update(documents)
-      .set({ status: "extracted", extracted: result.fields })
-      .where(and(eq(documents.id, id), inArray(documents.status, ["pending", "extracted"])))
-      .returning(resultColumns);
-    if (!updated) throw new AppError("CONFLICT", "Document was reviewed during extraction");
-
+      .set({ status: "queued" })
+      .where(eq(documents.id, id))
+      .returning(summaryColumns);
+    const jobId = await enqueue(tx, EXTRACTION_QUEUE, { documentId: id }, { dedupeKey: id });
     await tx.insert(documentEvents).values({
       documentId: id,
       actorId: user.id,
-      type: "extraction_succeeded",
+      type: "extraction_queued",
       fromStatus: doc.status,
-      toStatus: "extracted",
-      data: { model: result.model, latencyMs: result.latencyMs, usage: result.usage },
+      toStatus: "queued",
+      data: { jobId },
     });
     return updated;
   });

@@ -1,18 +1,13 @@
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { POST as extractDocument } from "@/app/api/documents/[id]/extract/route";
 import { GET as getDocument, PATCH as reviewDocument } from "@/app/api/documents/[id]/route";
 import { GET as listDocuments, POST as uploadDocument } from "@/app/api/documents/route";
 import { db } from "@/db";
-import { documents } from "@/db/schema";
-import { extractInvoice, type InvoiceFields } from "@/lib/extract";
+import { documents, jobs } from "@/db/schema";
+import type { InvoiceFields } from "@/lib/extract";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
 import { createUser } from "./users";
-
-vi.mock("@/lib/extract", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/extract")>();
-  return { ...actual, extractInvoice: vi.fn() };
-});
 
 const FIELDS: InvoiceFields = {
   vendor: "Acme Supplies",
@@ -38,26 +33,26 @@ async function statusOf(id: string) {
 const review = (id: string, body: unknown, cookie: string) =>
   reviewDocument(jsonRequest("PATCH", `/api/documents/${id}`, body, { cookie }), routeParams(id));
 
-beforeEach(() => {
-  vi.mocked(extractInvoice).mockReset();
-});
-
 describe("POST /api/documents", () => {
   it("requires authentication", async () => {
     const res = await uploadDocument(uploadRequest("invoice.txt", "Invoice 1042"), undefined);
     expect(res.status).toBe(401);
   });
 
-  it("stores a valid upload owned by the uploader", async () => {
+  it("stores a valid upload owned by the uploader and queues its extraction", async () => {
     const { user, cookie } = await createUser();
 
     const res = await uploadDocument(uploadRequest("invoice.txt", "Invoice 1042", { cookie }), undefined);
 
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body).toMatchObject({ filename: "invoice.txt", status: "pending" });
+    expect(body).toMatchObject({ filename: "invoice.txt", status: "queued" });
     const [stored] = await db.select().from(documents).where(eq(documents.id, body.id));
     expect(stored.uploadedBy).toBe(user.id);
+
+    const queued = await db.select().from(jobs);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ queue: "extract-document", status: "queued", payload: { documentId: body.id } });
   });
 
   it("rejects unsupported content types, oversized files and missing files", async () => {
@@ -108,30 +103,37 @@ describe("document visibility", () => {
 });
 
 describe("POST /api/documents/:id/extract", () => {
+  const requestExtraction = (id: string, cookie: string) =>
+    extractDocument(jsonRequest("POST", `/api/documents/${id}/extract`, undefined, { cookie }), routeParams(id));
+
   it("is restricted to reviewers", async () => {
     const { user, cookie } = await createUser();
-    const doc = await insertDocument({ uploadedBy: user.id });
+    const doc = await insertDocument({ status: "failed", uploadedBy: user.id });
 
-    const res = await extractDocument(
-      jsonRequest("POST", `/api/documents/${doc.id}/extract`, undefined, { cookie }),
-      routeParams(doc.id),
-    );
-    expect(res.status).toBe(403);
+    expect((await requestExtraction(doc.id, cookie)).status).toBe(403);
   });
 
-  it("stores validated fields and marks the document extracted", async () => {
-    vi.mocked(extractInvoice).mockResolvedValue({ fields: FIELDS, model: "test-model", latencyMs: 12, usage: null });
+  it("re-queues a failed document", async () => {
     const { cookie } = await createUser("reviewer");
-    const doc = await insertDocument();
+    const doc = await insertDocument({ status: "failed" });
 
-    const res = await extractDocument(
-      jsonRequest("POST", `/api/documents/${doc.id}/extract`, undefined, { cookie }),
-      routeParams(doc.id),
-    );
+    const res = await requestExtraction(doc.id, cookie);
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ status: "extracted", extracted: FIELDS });
+    expect(res.status).toBe(202);
+    expect(await statusOf(doc.id)).toBe("queued");
+    expect(await db.select().from(jobs)).toHaveLength(1);
   });
+
+  it.each(["queued", "processing", "approved", "rejected"] as const)(
+    "refuses to queue a document that is %s",
+    async (status) => {
+      const { cookie } = await createUser("reviewer");
+      const doc = await insertDocument({ status });
+
+      expect((await requestExtraction(doc.id, cookie)).status).toBe(409);
+      expect(await db.select().from(jobs)).toHaveLength(0);
+    },
+  );
 });
 
 describe("PATCH /api/documents/:id", () => {

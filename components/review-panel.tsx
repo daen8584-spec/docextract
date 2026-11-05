@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import type { DocumentStatus } from "@/db/schema";
 import { apiErrorMessage } from "@/lib/api-client";
+import { AutoRefresh } from "./auto-refresh";
 import type { InvoiceFields } from "@/lib/extract";
 
 type Status = DocumentStatus;
@@ -80,8 +81,37 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
   const button = "rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50";
   const errorMessage = error && <p role="alert" className="text-sm text-red-600">{error}</p>;
 
-  if (status === "pending" && !canReview) {
-    return <p className="text-sm text-zinc-600">Waiting for a reviewer to run extraction.</p>;
+  if (status === "queued" || status === "processing") {
+    return (
+      <div className="flex flex-col gap-2">
+        <AutoRefresh />
+        <p className="text-sm font-medium text-zinc-800">
+          {status === "queued" ? "Waiting for a worker" : "Extracting fields"}
+        </p>
+        <p className="text-sm text-zinc-600">This page updates automatically when extraction finishes.</p>
+      </div>
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-zinc-700">
+          Extraction failed after all retry attempts. The activity log below shows the last error.
+        </p>
+        {canReview && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => send(`/api/documents/${id}/extract`, { method: "POST" })}
+            className={`${button} self-start bg-zinc-900 text-white hover:bg-zinc-700`}
+          >
+            Retry extraction
+          </button>
+        )}
+        {errorMessage}
+      </div>
+    );
   }
 
   if (status === "extracted" && !canReview) {
@@ -89,23 +119,6 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
       <div className="flex flex-col gap-3">
         <p className="text-sm text-zinc-600">Awaiting review.</p>
         <ReadOnlyFields fields={fields} />
-      </div>
-    );
-  }
-
-  if (status === "pending") {
-    return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-zinc-600">Fields have not been extracted yet.</p>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => send(`/api/documents/${id}/extract`, { method: "POST" })}
-          className={`${button} self-start bg-zinc-900 text-white hover:bg-zinc-700`}
-        >
-          {pending ? "Extracting..." : "Extract fields"}
-        </button>
-        {errorMessage}
       </div>
     );
   }

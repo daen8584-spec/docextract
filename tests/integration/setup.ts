@@ -3,7 +3,7 @@ import { afterAll, beforeEach } from "vitest";
 import { db } from "@/db";
 
 beforeEach(async () => {
-  await db.execute(sql`truncate table documents, sessions, users restart identity cascade`);
+  await db.execute(sql`truncate table jobs, documents, sessions, users restart identity cascade`);
 });
 
 afterAll(async () => {

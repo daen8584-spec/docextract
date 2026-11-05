@@ -29,7 +29,7 @@ describe("audit log", () => {
     const { id } = await res.json();
 
     const [event] = await eventsOf(id);
-    expect(event).toMatchObject({ type: "uploaded", actorId: user.id, toStatus: "pending" });
+    expect(event).toMatchObject({ type: "uploaded", actorId: user.id, toStatus: "queued" });
   });
 
   it("records reviewer corrections as a field diff", async () => {
