@@ -6,7 +6,7 @@ import { handle, parseDocumentId } from "@/lib/http";
 type Context = { params: Promise<{ id: string }> };
 
 export const POST = handle(async (request: Request, { params }: Context) => {
-  await requireUser(request, REVIEWER_ROLES);
+  const user = await requireUser(request, REVIEWER_ROLES);
   const id = parseDocumentId((await params).id);
-  return NextResponse.json(await extractDocument(id));
+  return NextResponse.json(await extractDocument(user, id));
 });

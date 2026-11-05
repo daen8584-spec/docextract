@@ -2,11 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/app-header";
+import { EventTimeline } from "@/components/event-timeline";
 import { ReviewPanel } from "@/components/review-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { isReviewer, type SessionUser } from "@/lib/auth";
 import { requirePageUser } from "@/lib/current-user";
-import { getDocument } from "@/lib/documents";
+import { getDocument, listDocumentEvents } from "@/lib/documents";
 import { AppError } from "@/lib/errors";
 import type { InvoiceFields } from "@/lib/extract";
 import { parseDocumentId } from "@/lib/http";
@@ -33,6 +34,7 @@ async function loadDocument(user: SessionUser, rawId: string) {
 async function DocumentDetail({ params }: Props) {
   const user = await requirePageUser();
   const doc = await loadDocument(user, (await params).id);
+  const events = await listDocumentEvents(user, doc.id);
 
   return (
     <>
@@ -64,6 +66,12 @@ async function DocumentDetail({ params }: Props) {
             </div>
           </section>
         </div>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Activity</h2>
+          <div className="rounded-lg border border-zinc-200 bg-white p-4">
+            <EventTimeline events={events} />
+          </div>
+        </section>
       </main>
     </>
   );

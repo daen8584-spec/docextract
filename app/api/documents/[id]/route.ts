@@ -12,8 +12,8 @@ export const GET = handle(async (request: Request, { params }: Context) => {
 });
 
 export const PATCH = handle(async (request: Request, { params }: Context) => {
-  await requireUser(request, REVIEWER_ROLES);
+  const user = await requireUser(request, REVIEWER_ROLES);
   const id = parseDocumentId((await params).id);
   const review = await parseJson(request, reviewSchema);
-  return NextResponse.json(await reviewDocument(id, review));
+  return NextResponse.json(await reviewDocument(user, id, review));
 });
