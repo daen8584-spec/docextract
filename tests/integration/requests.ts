@@ -1,9 +1,10 @@
 const BASE_URL = "http://localhost";
 
-type RequestOptions = { cookie?: string };
+type RequestOptions = { cookie?: string; headers?: Record<string, string> };
 
 function headers(options: RequestOptions, extra: Record<string, string> = {}): Record<string, string> {
-  return options.cookie ? { ...extra, cookie: options.cookie } : extra;
+  const merged = { ...extra, ...options.headers };
+  return options.cookie ? { ...merged, cookie: options.cookie } : merged;
 }
 
 export function uploadRequest(

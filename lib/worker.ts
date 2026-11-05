@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimJob, completeJob, failJob, type Job, recoverStaleJobs } from "./queue";
+import { pruneRateLimits } from "./rate-limit";
 import { logger, withLogger } from "./logger";
 
 export type QueueHandler = {
@@ -47,6 +48,8 @@ async function recover(handlers: WorkerOptions["handlers"]) {
     logger.warn({ jobId: job.id, queue: job.queue, status: job.status }, "recovered stale job");
     if (job.status === "failed") await handlers[job.queue]?.onExhausted?.(job, "Worker lock expired");
   }
+  const pruned = await pruneRateLimits();
+  if (pruned > 0) logger.debug({ pruned }, "pruned idle rate limit buckets");
 }
 
 /**

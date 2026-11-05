@@ -3,9 +3,11 @@ import { requireUser } from "@/lib/auth";
 import { createDocument, listDocuments } from "@/lib/documents";
 import { AppError } from "@/lib/errors";
 import { handle } from "@/lib/http";
+import { enforceRateLimits, LIMITS } from "@/lib/rate-limit";
 
 export const POST = handle(async (request: Request) => {
   const user = await requireUser(request);
+  await enforceRateLimits([[`upload:user:${user.id}`, LIMITS.uploadPerUser]]);
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) {

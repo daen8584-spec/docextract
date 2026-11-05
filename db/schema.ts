@@ -1,5 +1,16 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () =>
@@ -122,3 +133,17 @@ export type DocumentStatus = (typeof documentStatus.enumValues)[number];
 export type UserRole = (typeof userRole.enumValues)[number];
 export type DocumentEventType = (typeof documentEventType.enumValues)[number];
 export type JobStatus = (typeof jobStatus.enumValues)[number];
+
+/**
+ * Token buckets for rate limiting, one row per key (for example "login:email:a@b.c").
+ * Updated only through the rate_limit_take() SQL function; see lib/rate-limit.ts.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").primaryKey(),
+    tokens: doublePrecision("tokens").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("rate_limits_updated_at_idx").on(t.updatedAt)],
+);

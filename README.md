@@ -12,6 +12,7 @@ DocExtract treats model output as untrusted input. Every response is validated a
 - **Schema-validated LLM output** with any OpenAI-compatible provider (Groq, OpenRouter, LiteLLM, a local llama.cpp server)
 - **Human review** with field-level corrections and atomic, race-free status transitions
 - **Authentication and authorization** with server-side sessions, three roles and object-level access control
+- **Rate limiting** of login, signup and upload with token buckets in PostgreSQL, consistent across instances
 - **Audit log** of every state change, including who changed what and the reviewer's corrections
 - **Evaluation harness** reporting per-field accuracy, missing values and hallucinations across a test dataset
 - **Observability** through structured JSON logs, request ids, and LLM latency and token usage per extraction
@@ -59,6 +60,7 @@ Significant decisions are documented as [Architecture Decision Records](docs/adr
 - [0003](docs/adr/0003-postgresql-job-queue.md) A job queue in PostgreSQL for transactional enqueueing without extra infrastructure
 - [0004](docs/adr/0004-session-authentication.md) Server-side sessions with scrypt hashing and hashed session tokens
 - [0005](docs/adr/0005-untrusted-llm-output.md) Validation, human review and evaluation for LLM output
+- [0006](docs/adr/0006-rate-limiting-in-postgresql.md) Token bucket rate limiting in PostgreSQL
 
 ## Roles
 
@@ -73,6 +75,8 @@ New accounts are uploaders. Promote a user with `npm run user:role -- user@examp
 ## API
 
 Document endpoints and `/api/auth/me` require a session cookie. Errors are returned as `{"error": "...", "details": ...}` with an `x-request-id` header for correlation with the logs.
+
+Login, signup and upload are rate limited (see [0006](docs/adr/0006-rate-limiting-in-postgresql.md)) and answer `429` with a `Retry-After` header when a limit is reached. Per-address limits need the client address: set `TRUSTED_PROXY_HOPS` to the number of proxies in front of the application that append to `X-Forwarded-For`. Without it, only the per-account and per-user limits apply.
 
 | Method | Path | Access | Description |
 | --- | --- | --- | --- |
@@ -124,7 +128,7 @@ npm run test:integration
 
 The integration tests use `TEST_DATABASE_URL`, which defaults to `DATABASE_URL` with the database name changed to `docextract_test`. They refuse to run against the same database as `DATABASE_URL`, because they truncate every table.
 
-Unit tests cover the extraction client, scoring and field diffing with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
+Unit tests cover the extraction client, scoring, field diffing and client address resolution with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, rate limits and their refill, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
 
 ## Evaluating extraction quality
 
@@ -174,7 +178,6 @@ worker/         Background worker entry point
 ## Roadmap
 
 - PDF support with text extraction
-- Rate limiting on login and upload
 - Confidence scores and highlighting of uncertain fields
 - `LISTEN/NOTIFY` to start jobs without polling delay
 

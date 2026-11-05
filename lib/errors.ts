@@ -6,6 +6,7 @@ export type ErrorCode =
   | "CONFLICT"
   | "PAYLOAD_TOO_LARGE"
   | "UNSUPPORTED_MEDIA_TYPE"
+  | "TOO_MANY_REQUESTS"
   | "BAD_GATEWAY";
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
@@ -16,6 +17,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   CONFLICT: 409,
   PAYLOAD_TOO_LARGE: 413,
   UNSUPPORTED_MEDIA_TYPE: 415,
+  TOO_MANY_REQUESTS: 429,
   BAD_GATEWAY: 502,
 };
 
@@ -26,12 +28,15 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
 export class AppError extends Error {
   readonly code: ErrorCode;
   readonly details?: unknown;
+  /** Sent as the Retry-After header, in seconds. */
+  readonly retryAfterSeconds?: number;
 
-  constructor(code: ErrorCode, message: string, details?: unknown) {
+  constructor(code: ErrorCode, message: string, details?: unknown, options: { retryAfterSeconds?: number } = {}) {
     super(message);
     this.name = "AppError";
     this.code = code;
     this.details = details;
+    this.retryAfterSeconds = options.retryAfterSeconds;
   }
 
   get status(): number {

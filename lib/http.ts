@@ -10,7 +10,9 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 export function errorResponse(error: AppError): NextResponse {
   const body = error.details === undefined ? { error: error.message } : { error: error.message, details: error.details };
-  return NextResponse.json(body, { status: error.status });
+  const response = NextResponse.json(body, { status: error.status });
+  if (error.retryAfterSeconds !== undefined) response.headers.set("retry-after", String(error.retryAfterSeconds));
+  return response;
 }
 
 /** Accepts a caller-supplied request id only if it is safe to log; otherwise generates one. */
