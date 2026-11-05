@@ -1,5 +1,7 @@
 # DocExtract
 
+[![CI](https://github.com/daen8584-spec/docextract/actions/workflows/ci.yml/badge.svg)](https://github.com/daen8584-spec/docextract/actions/workflows/ci.yml)
+
 Upload a document, extract structured fields with an LLM in the background, then have a reviewer verify, correct and approve the result before it is trusted.
 
 DocExtract treats model output as untrusted input. Every response is validated against a schema, extraction runs on a retrying job queue, every state change is recorded in an audit log, and extraction quality is measured with an evaluation harness.
@@ -175,3 +177,7 @@ worker/         Background worker entry point
 - Rate limiting on login and upload
 - Confidence scores and highlighting of uncertain fields
 - `LISTEN/NOTIFY` to start jobs without polling delay
+
+## License
+
+[MIT](LICENSE)
