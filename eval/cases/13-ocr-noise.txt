@@ -1,0 +1,9 @@
+INV0ICE
+Vend or: Riverside  Office
+         Supply Co.
+lnvoice  #: ROS-55821
+Date: 2026-10-07     Due Date:
+2026-11-06
+Subtotal ........ 1 ,180.00
+Tax ............... 94.40
+TOTAL DUE ....... USD 1,274.40

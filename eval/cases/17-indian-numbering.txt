@@ -1,0 +1,9 @@
+Shakti Engineering Pvt. Ltd.
+Tax Invoice No: SE/2026-27/0193
+Dates are DD-MM-YYYY.
+Invoice Date: 12-10-2026
+Due Date: 11-11-2026
+
+Taxable value          ₹ 1,05,500.00
+GST @ 18%              ₹   18,990.00
+Total                  ₹ 1,24,490.00

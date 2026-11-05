@@ -1,0 +1,8 @@
+Greenfield Landscaping LLC
+Invoice GL-3392
+Invoice date: 2026-09-01
+Due date: 2026-10-01
+
+Invoice total:            2,000.00 USD
+Payment received:          -500.00 USD
+Balance due:              1,500.00 USD

@@ -1,0 +1,17 @@
+BILL TO:
+Contoso Ltd
+42 Harbor Road, Seattle WA
+
+INVOICE
+Invoice no.: FB-2026-0718
+Invoice date: 2026-10-20
+Due date: 2026-11-19
+
+Description                         Amount
+Data migration services           4,800.00
+Project management                  750.00
+Total (USD)                       5,550.00
+
+Please remit payment to:
+Fabrikam Inc.
+1 Industrial Way, Austin TX

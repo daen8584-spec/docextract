@@ -1,0 +1,10 @@
+Lakeshore Printing Ltd.
+Toronto, Ontario
+Invoice: LP-4471
+All amounts are in Canadian dollars.
+
+Brochures (1,000)              $1,150.00
+HST (13%)                        $149.50
+Total                          $1,299.50
+
+Due: 2026-11-28

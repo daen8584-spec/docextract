@@ -131,7 +131,7 @@ npm run eval
 npm run eval -- --min-accuracy 0.95
 ```
 
-The harness runs every case in `eval/cases` through the extraction pipeline and reports exact-match rate and per-field accuracy, separating incorrect values, missing values and hallucinated values. The dataset covers line items with tax, European and Chilean number formats, written-out dates, currency symbols, receipts without invoice numbers and documents with distracting reference numbers. With `--min-accuracy` the command exits non-zero when field accuracy falls below the threshold, so it can gate prompt or model changes. Full results for each run are written to `eval/results/`, which is not committed.
+The harness runs every case in `eval/cases` through the extraction pipeline and reports exact-match rate and per-field accuracy, separating incorrect values, missing values and hallucinated values. The dataset has 20 cases in two groups. Cases 01 to 10 cover common layouts: line items with tax, European and Chilean number formats, written-out dates, currency symbols, receipts without invoice numbers and distracting reference numbers. Cases 11 to 20 target specific failure modes: the customer named before the vendor, partially paid invoices, OCR noise, a second currency given for reference, US and Indian date conventions, a dollar sign that means Canadian dollars, Indian and Swiss digit grouping, an email thread quoting an older invoice, and a document with no currency, where the correct answer is null rather than a guess. With `--min-accuracy` the command exits non-zero when field accuracy falls below the threshold, so it can gate prompt or model changes. Full results for each run are written to `eval/results/`, which is not committed.
 
 Reviewed documents can be turned into new cases:
 

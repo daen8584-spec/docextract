@@ -1,0 +1,18 @@
+From: billing@northpeakcloud.example
+Subject: Invoice NPC-10442 for November
+
+Hi,
+
+Please find your November invoice below.
+
+Invoice: NPC-10442
+Amount due: 870.00 USD
+Due date: 2026-12-05
+
+Thanks,
+North Peak Cloud Services
+
+> On 2026-10-05, billing@northpeakcloud.example wrote:
+> Invoice: NPC-10317
+> Amount due: 820.00 USD
+> Due date: 2026-11-05

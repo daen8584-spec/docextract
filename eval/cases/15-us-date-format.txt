@@ -1,0 +1,6 @@
+Maple & Oak Furniture Co.
+Invoice No. MO-80214
+All dates are in MM/DD/YYYY format.
+Invoice date: 03/06/2027
+Due date: 04/05/2027
+Amount due: $2,340.00 USD
