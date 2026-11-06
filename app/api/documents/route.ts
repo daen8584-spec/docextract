@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { createDocument, listDocuments } from "@/lib/documents";
+import { createDocument, listDocuments, MAX_UPLOAD_BODY_BYTES } from "@/lib/documents";
 import { AppError } from "@/lib/errors";
-import { handle } from "@/lib/http";
+import { handle, readFormData } from "@/lib/http";
 import { enforceRateLimits, LIMITS } from "@/lib/rate-limit";
 
 export const POST = handle(async (request: Request) => {
   const user = await requireUser(request);
   await enforceRateLimits([[`upload:user:${user.id}`, LIMITS.uploadPerUser]]);
-  const form = await request.formData().catch(() => null);
+  const form = await readFormData(request, MAX_UPLOAD_BODY_BYTES);
   const file = form?.get("file");
   if (!(file instanceof File)) {
     throw new AppError("BAD_REQUEST", "Expected multipart field 'file'");

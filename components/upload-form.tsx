@@ -14,16 +14,19 @@ export function UploadForm() {
     const form = event.currentTarget;
     setPending(true);
     setError(null);
-
-    const res = await fetch("/api/documents", { method: "POST", body: new FormData(form) });
-    setPending(false);
-
-    if (!res.ok) {
-      setError(await apiErrorMessage(res));
-      return;
+    try {
+      const res = await fetch("/api/documents", { method: "POST", body: new FormData(form) });
+      if (!res.ok) {
+        setError(await apiErrorMessage(res));
+        return;
+      }
+      form.reset();
+      router.refresh();
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setPending(false);
     }
-    form.reset();
-    router.refresh();
   }
 
   return (

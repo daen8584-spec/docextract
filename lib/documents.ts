@@ -16,6 +16,9 @@ export const UPLOAD_LIMITS: Readonly<Record<string, number>> = {
   "application/pdf": 10_000_000,
 };
 
+/** Largest upload request body read: the largest file plus room for the multipart framing. */
+export const MAX_UPLOAD_BODY_BYTES = Math.max(...Object.values(UPLOAD_LIMITS)) + 64 * 1024;
+
 export const reviewSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("approve"), fields: invoiceFields.optional() }),
   z.object({ action: z.literal("reject") }),
@@ -84,10 +87,19 @@ export async function listDocumentEvents(user: SessionUser, id: string) {
 async function readContent(file: UploadedFile): Promise<{ content: string; pages?: number }> {
   if (file.type === "application/pdf") {
     const { text, pages } = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
-    return { content: text, pages };
+    // PostgreSQL text cannot hold NUL, and in a PDF text layer it carries no meaning.
+    return { content: text.replaceAll("\u0000", ""), pages };
   }
-  return { content: await file.text() };
+  const content = await file.text();
+  if (content.includes("\u0000")) {
+    // NUL does not occur in UTF-8 text; it marks a binary file or another encoding (UTF-16).
+    throw new AppError("UNPROCESSABLE_CONTENT", "The file is not UTF-8 text. Save it as UTF-8 or upload a PDF.");
+  }
+  return { content };
 }
+
+/** The file name without control characters, which PostgreSQL text (NUL) and logs cannot take safely. */
+const cleanFilename = (name: string) => name.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 255) || "upload";
 
 export async function createDocument(user: SessionUser, file: UploadedFile) {
   const limit = UPLOAD_LIMITS[file.type];
@@ -104,7 +116,7 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
   return db.transaction(async (tx) => {
     const [doc] = await tx
       .insert(documents)
-      .values({ filename: file.name, mimeType: file.type, content, uploadedBy: user.id })
+      .values({ filename: cleanFilename(file.name), mimeType: file.type, content, uploadedBy: user.id })
       .returning(summaryColumns);
     const jobId = await enqueue(tx, EXTRACTION_QUEUE, { documentId: doc.id }, { dedupeKey: doc.id });
     await tx.insert(documentEvents).values({
@@ -112,7 +124,7 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
       actorId: user.id,
       type: "uploaded",
       toStatus: doc.status,
-      data: { filename: file.name, sizeBytes: file.size, jobId, ...(pages === undefined ? {} : { pages }) },
+      data: { filename: cleanFilename(file.name), sizeBytes: file.size, jobId, ...(pages === undefined ? {} : { pages }) },
     });
     return doc;
   });
@@ -141,6 +153,11 @@ export async function requestExtraction(user: SessionUser, id: string) {
       .where(eq(documents.id, id))
       .returning(summaryColumns);
     const jobId = await enqueue(tx, EXTRACTION_QUEUE, { documentId: id }, { dedupeKey: id });
+    if (jobId === null) {
+      // A job for this document is still queued or running. Throwing rolls the status
+      // change back, so the document is never left queued without a job behind it.
+      throw new AppError("CONFLICT", "The previous extraction is still finishing. Try again in a moment.");
+    }
     await tx.insert(documentEvents).values({
       documentId: id,
       actorId: user.id,

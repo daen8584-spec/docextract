@@ -14,6 +14,15 @@ export const FIELD_LABELS: Record<FieldKey, string> = {
   dueDate: "Due date",
 };
 
+/** How each field is edited in the review form. */
+export const FIELD_INPUTS: Record<FieldKey, { type: "text" | "number" | "date"; hint?: string }> = {
+  vendor: { type: "text" },
+  invoiceNumber: { type: "text" },
+  totalAmount: { type: "number" },
+  currency: { type: "text", hint: "ISO 4217 code, for example USD" },
+  dueDate: { type: "date" },
+};
+
 /** Lists the fields a reviewer changed relative to the model output. */
 export function diffFields(before: InvoiceFields | null, after: InvoiceFields): FieldCorrection[] {
   return FIELD_KEYS.flatMap((field) => {

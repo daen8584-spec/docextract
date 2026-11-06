@@ -4,18 +4,13 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import type { DocumentStatus } from "@/db/schema";
 import { apiErrorMessage } from "@/lib/api-client";
-import { AutoRefresh } from "./auto-refresh";
 import type { InvoiceFields } from "@/lib/extract";
+import { FIELD_INPUTS, FIELD_KEYS, FIELD_LABELS } from "@/lib/fields";
+import { AutoRefresh } from "./auto-refresh";
 
 type Status = DocumentStatus;
 
-const FIELDS = [
-  { key: "vendor", label: "Vendor", type: "text" },
-  { key: "invoiceNumber", label: "Invoice number", type: "text" },
-  { key: "totalAmount", label: "Total amount", type: "number" },
-  { key: "currency", label: "Currency (ISO 4217)", type: "text" },
-  { key: "dueDate", label: "Due date", type: "date" },
-] as const;
+const FIELDS = FIELD_KEYS.map((key) => ({ key, label: FIELD_LABELS[key], ...FIELD_INPUTS[key] }));
 
 function toFields(form: HTMLFormElement): InvoiceFields {
   const data = new FormData(form);
@@ -56,15 +51,21 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
   async function send(url: string, init: RequestInit) {
     setPending(true);
     setError(null);
-    const res = await fetch(url, init);
-    setPending(false);
-
-    if (!res.ok) {
-      setError(await apiErrorMessage(res));
-      return;
+    try {
+      const res = await fetch(url, init);
+      if (!res.ok) {
+        setError(await apiErrorMessage(res));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setPending(false);
     }
-    router.refresh();
   }
+
+  const extractAgain = () => send(`/api/documents/${id}/extract`, { method: "POST" });
 
   const review = (body: object) =>
     send(`/api/documents/${id}`, {
@@ -103,7 +104,7 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
           <button
             type="button"
             disabled={pending}
-            onClick={() => send(`/api/documents/${id}/extract`, { method: "POST" })}
+            onClick={extractAgain}
             className={`${button} self-start bg-zinc-900 text-white hover:bg-zinc-700`}
           >
             Retry extraction
@@ -134,6 +135,7 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
               type={field.type}
               step={field.type === "number" ? "0.01" : undefined}
               defaultValue={fields?.[field.key] ?? ""}
+              placeholder={field.hint}
               className="rounded-md border border-zinc-300 px-3 py-2 text-zinc-900 focus:border-zinc-900 focus:outline-none"
             />
           </label>
@@ -150,6 +152,14 @@ export function ReviewPanel({ id, status, fields, canReview }: Props) {
             className={`${button} border border-zinc-300 text-zinc-700 hover:bg-zinc-100`}
           >
             Reject
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={extractAgain}
+            className={`${button} ml-auto text-zinc-600 hover:bg-zinc-100`}
+          >
+            Extract again
           </button>
         </div>
       </form>

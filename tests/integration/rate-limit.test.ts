@@ -5,7 +5,8 @@ import { POST as signup } from "@/app/api/auth/signup/route";
 import { POST as uploadDocument } from "@/app/api/documents/route";
 import { db } from "@/db";
 import { rateLimits } from "@/db/schema";
-import { LIMITS, pruneRateLimits } from "@/lib/rate-limit";
+import { AppError } from "@/lib/errors";
+import { enforceRateLimits, LIMITS, pruneRateLimits } from "@/lib/rate-limit";
 import { jsonRequest, uploadRequest } from "./requests";
 import { createUser, TEST_PASSWORD } from "./users";
 
@@ -85,6 +86,22 @@ describe("signup and upload rate limiting", () => {
     const blocked = await upload();
     expect(blocked.status).toBe(429);
     expect(await blocked.json()).toEqual({ error: "Too many requests. Try again later." });
+  });
+});
+
+describe("concurrent attempts", () => {
+  it("admits exactly the bucket's capacity when 40 attempts arrive at once", async () => {
+    const bucket = { capacity: 10, refillPerSecond: 1 / 3600 };
+    const results = await Promise.allSettled(
+      Array.from({ length: 40 }, () => enforceRateLimits([["concurrency:test", bucket]])),
+    );
+
+    const admitted = results.filter((r) => r.status === "fulfilled");
+    const limited = results.filter(
+      (r) => r.status === "rejected" && r.reason instanceof AppError && r.reason.code === "TOO_MANY_REQUESTS",
+    );
+    expect(admitted).toHaveLength(10);
+    expect(limited).toHaveLength(30);
   });
 });
 

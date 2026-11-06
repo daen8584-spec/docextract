@@ -4,7 +4,9 @@ import { POST as extractDocument } from "@/app/api/documents/[id]/extract/route"
 import { GET as getDocument, PATCH as reviewDocument } from "@/app/api/documents/[id]/route";
 import { GET as listDocuments, POST as uploadDocument } from "@/app/api/documents/route";
 import { db } from "@/db";
-import { documents, jobs } from "@/db/schema";
+import { documentEvents, documents, jobs } from "@/db/schema";
+import { EXTRACTION_QUEUE } from "@/lib/extraction-job";
+import { enqueue } from "@/lib/queue";
 import type { InvoiceFields } from "@/lib/extract";
 import { makePdf } from "../fixtures/pdf";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
@@ -64,6 +66,53 @@ describe("POST /api/documents", () => {
     const missing = await uploadDocument(jsonRequest("POST", "/api/documents", {}, { cookie }), undefined);
 
     expect([wrongType.status, tooLarge.status, missing.status]).toEqual([415, 413, 400]);
+  });
+
+  it("refuses an oversized request body before reading it into memory", async () => {
+    const { cookie } = await createUser();
+    const declared = new Request("http://localhost/api/documents", {
+      method: "POST",
+      headers: { cookie, "content-type": "multipart/form-data; boundary=x", "content-length": "50000000" },
+      body: "--x--",
+    });
+    expect((await uploadDocument(declared, undefined)).status).toBe(413);
+
+    // Without Content-Length (chunked), reading stops once the limit is passed.
+    let sent = 0;
+    const chunk = new Uint8Array(1 << 20);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const chunked = new Request("http://localhost/api/documents", {
+      method: "POST",
+      headers: { cookie, "content-type": "multipart/form-data; boundary=x" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect((await uploadDocument(chunked, undefined)).status).toBe(413);
+    expect(sent).toBeLessThan(16 << 20);
+    expect(await db.select().from(documents)).toHaveLength(0);
+  });
+
+  it("rejects text that is not UTF-8 instead of failing on NUL bytes", async () => {
+    const { cookie } = await createUser();
+    const utf16 = new Uint8Array([0xff, 0xfe, 0x49, 0x00, 0x6e, 0x00, 0x76, 0x00]);
+    const res = await uploadDocument(uploadRequest("invoice.txt", utf16, { cookie }), undefined);
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/not UTF-8 text/);
+    expect(await db.select().from(documents)).toHaveLength(0);
+  });
+
+  it("removes control characters from the stored file name", async () => {
+    const { cookie } = await createUser();
+    const res = await uploadDocument(uploadRequest("inv\u0000oice\n.txt", "Invoice 1042", { cookie }), undefined);
+
+    expect(res.status).toBe(201);
+    expect((await res.json()).filename).toBe("invoice.txt");
   });
 
   it("stores the text layer of an uploaded PDF", async () => {
@@ -162,6 +211,28 @@ describe("POST /api/documents/:id/extract", () => {
       expect(await db.select().from(jobs)).toHaveLength(0);
     },
   );
+
+  it("re-queues an extracted document", async () => {
+    const { cookie } = await createUser("reviewer");
+    const doc = await insertDocument({ status: "extracted", extracted: FIELDS });
+
+    expect((await requestExtraction(doc.id, cookie)).status).toBe(202);
+    expect(await statusOf(doc.id)).toBe("queued");
+  });
+
+  it("does not leave a document queued without a job while the previous job is finishing", async () => {
+    const { cookie } = await createUser("reviewer");
+    const doc = await insertDocument({ status: "extracted", extracted: FIELDS });
+    // The previous job has not been marked complete yet.
+    await enqueue(db, EXTRACTION_QUEUE, { documentId: doc.id }, { dedupeKey: doc.id });
+    await db.update(jobs).set({ status: "running" });
+
+    const res = await requestExtraction(doc.id, cookie);
+
+    expect(res.status).toBe(409);
+    expect(await statusOf(doc.id)).toBe("extracted");
+    expect(await db.select().from(documentEvents).where(eq(documentEvents.type, "extraction_queued"))).toHaveLength(0);
+  });
 });
 
 describe("PATCH /api/documents/:id", () => {

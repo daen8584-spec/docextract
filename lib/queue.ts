@@ -70,8 +70,12 @@ export async function claimJob(queue: string, workerId: string): Promise<Job | n
   return rows[0] ? toJob(rows[0]) : null;
 }
 
-export async function completeJob(id: string): Promise<void> {
-  await db.execute(sql`
+/**
+ * Marks a running job as done. Pass a transaction to complete it atomically with the
+ * job's own writes; completing an already completed job does nothing.
+ */
+export async function completeJob(id: string, executor: Executor = db): Promise<void> {
+  await executor.execute(sql`
     update jobs set status = 'succeeded', locked_at = null, locked_by = null, last_error = null, updated_at = now()
     where id = ${id} and status = 'running'`);
 }

@@ -52,6 +52,35 @@ export function handle<C>(handler: RouteHandler<C>): RouteHandler<C> {
   };
 }
 
+/**
+ * Reads a multipart form body of at most maxBytes. The size is checked against
+ * Content-Length before anything is read, and counted while reading for chunked
+ * requests, so an oversized upload is refused without holding it in memory.
+ */
+export async function readFormData(request: Request, maxBytes: number): Promise<FormData | null> {
+  const tooLarge = () => new AppError("PAYLOAD_TOO_LARGE", `Request body exceeds ${Math.floor(maxBytes / 1_000_000)} MB`);
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw tooLarge();
+  if (!request.body) return null;
+
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  const reader = request.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const body = new Blob(chunks as BlobPart[]);
+  const contentType = request.headers.get("content-type") ?? "";
+  return new Response(body, { headers: { "content-type": contentType } }).formData().catch(() => null);
+}
+
 export async function parseJson<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const body: unknown = await request.json().catch(() => undefined);
   const parsed = schema.safeParse(body);

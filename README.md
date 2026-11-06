@@ -86,7 +86,7 @@ Login, signup and upload are rate limited (see [0006](docs/adr/0006-rate-limitin
 | `POST` | `/api/auth/login` | Public | Start a session |
 | `POST` | `/api/auth/logout` | Public | End the current session, if any, and clear the cookie |
 | `GET` | `/api/auth/me` | Authenticated | Current user |
-| `POST` | `/api/documents` | Authenticated | Upload a document (`multipart/form-data`, field `file`): plain text up to 1 MB or a PDF with a text layer up to 10 MB and 50 pages. Queues extraction |
+| `POST` | `/api/documents` | Authenticated | Upload a document (`multipart/form-data`, field `file`): UTF-8 text up to 1 MB or a PDF with a text layer up to 10 MB and 50 pages. A larger request body is refused with `413` before it is read into memory. Queues extraction |
 | `GET` | `/api/documents` | Authenticated | List up to 50 visible documents, newest first |
 | `GET` | `/api/documents/:id` | Authenticated | Document with its extracted fields |
 | `GET` | `/api/documents/:id/events` | Authenticated | Audit history of the document |
@@ -139,7 +139,7 @@ npm run test:integration
 
 The integration tests use `TEST_DATABASE_URL`, which defaults to `DATABASE_URL` with the database name changed to `docextract_test`. They refuse to run against the same database as `DATABASE_URL`, because they truncate every table.
 
-Unit tests cover the extraction client, scoring, field diffing, PDF text extraction and client address resolution with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, rate limits and their refill, PDF uploads, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
+Unit tests cover the extraction client, scoring, field diffing, PDF text extraction and client address resolution with no external dependencies. Integration tests call the route handlers and the worker against a real PostgreSQL database and cover authentication, authorization, rate limits and their refill (including 40 concurrent attempts on one bucket), upload size and encoding checks, PDF uploads, the audit log, concurrent reviews, queue semantics (deduplication, concurrent claims, backoff, crash recovery) and the extraction retry flow. The LLM is mocked in all tests. CI runs lint, type checking, both test suites and a production build on every push.
 
 ## Evaluating extraction quality
 

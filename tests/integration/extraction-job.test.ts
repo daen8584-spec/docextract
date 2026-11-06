@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { documentEvents, documents, jobs } from "@/db/schema";
 import { ExtractionError, extractInvoice } from "@/lib/extract";
 import { EXTRACTION_QUEUE, extractionHandler } from "@/lib/extraction-job";
-import { enqueue } from "@/lib/queue";
+import { claimJob, enqueue } from "@/lib/queue";
 import { processNext } from "@/lib/worker";
 
 vi.mock("@/lib/extract", async (importOriginal) => {
@@ -55,6 +55,24 @@ describe("extraction worker", () => {
       .from(documentEvents)
       .where(eq(documentEvents.type, "extraction_succeeded"));
     expect(success.data).toMatchObject({ model: "test-model", latencyMs: 840, usage: { totalTokens: 360 } });
+    expect((await db.select().from(jobs))[0].status).toBe("succeeded");
+  });
+
+  it("completes the job in the same transaction that stores the result", async () => {
+    vi.mocked(extractInvoice).mockResolvedValue({
+      fields: FIELDS,
+      model: "test-model",
+      latencyMs: 10,
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const doc = await queuedDocument();
+    const job = await claimJob(EXTRACTION_QUEUE, "test-worker");
+    expect(job).not.toBeNull();
+
+    // Before the worker's own completion step runs, the job is already done.
+    await extractionHandler.run(job!);
+
+    expect((await documentState(doc.id)).status).toBe("extracted");
     expect((await db.select().from(jobs))[0].status).toBe("succeeded");
   });
 

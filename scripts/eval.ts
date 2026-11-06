@@ -18,6 +18,16 @@ const { values: args } = parseArgs({
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
+/** The --min-accuracy threshold, validated before any case runs: a typo must not disable the gate. */
+function parseThreshold(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const threshold = Number(value);
+  if (value.trim() === "" || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    throw new Error(`--min-accuracy must be a number between 0 and 1, got "${value}"`);
+  }
+  return threshold;
+}
+
 async function loadCases() {
   const files = (await readdir(CASES_DIR)).filter((f) => f.endsWith(".txt")).sort();
   const selected = args.filter ? files.filter((f) => f.includes(args.filter!)) : files;
@@ -73,6 +83,7 @@ function report(model: string, summary: EvalSummary, performance: Performance, r
 }
 
 async function main() {
+  const threshold = parseThreshold(args["min-accuracy"]);
   const cases = await loadCases();
   if (cases.length === 0) throw new Error(`No cases found in ${CASES_DIR}`);
 
@@ -103,7 +114,6 @@ async function main() {
   await writeFile(output, JSON.stringify({ model, summary, performance, results }, null, 2));
   console.log(`\nFull results written to ${output}`);
 
-  const threshold = args["min-accuracy"] === undefined ? undefined : Number(args["min-accuracy"]);
   if (threshold !== undefined && summary.fieldAccuracy < threshold) {
     console.error(`Field accuracy ${percent(summary.fieldAccuracy)} is below the threshold of ${percent(threshold)}`);
     process.exitCode = 1;

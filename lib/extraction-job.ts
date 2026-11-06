@@ -4,7 +4,7 @@ import { db } from "../db";
 import { documentEvents, documents } from "../db/schema";
 import { extractInvoice, type ExtractionResult } from "./extract";
 import { currentLogger } from "./logger";
-import type { Job } from "./queue";
+import { completeJob, type Job } from "./queue";
 import { errorMessage, type QueueHandler } from "./worker";
 
 export const EXTRACTION_QUEUE = "extract-document";
@@ -57,6 +57,10 @@ async function startExtraction(documentId: string, job: Job) {
 
 async function saveResult(documentId: string, job: Job, result: ExtractionResult) {
   await db.transaction(async (tx) => {
+    // The job is completed in the same transaction as the result. Otherwise, between the
+    // two, the document is already extracted while its job still counts as running, and a
+    // re-extraction requested in that window would find no room for a new job.
+    await completeJob(job.id, tx);
     const [updated] = await tx
       .update(documents)
       .set({ status: "extracted", extracted: result.fields })
