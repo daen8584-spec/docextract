@@ -22,7 +22,7 @@ async function HomeContent() {
         <header className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold text-zinc-900">Documents</h1>
           <p className="text-sm text-zinc-600">
-            Upload a text invoice, extract structured fields with an LLM, then review and approve the result.
+            Upload a text or PDF invoice, extract structured fields with an LLM, then review and approve the result.
           </p>
         </header>
         <UploadForm />

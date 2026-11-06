@@ -120,6 +120,15 @@ npm run worker
 
 Open http://localhost:3000, create an account, promote it with `npm run user:role -- <email> reviewer`, and upload `eval/cases/01-simple.txt`.
 
+### With Docker
+
+```bash
+export LLM_API_KEY=...   # or put LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in .env
+docker compose up -d --build
+```
+
+This starts PostgreSQL, applies the migrations, and runs the web app on `http://localhost:3000` and the extraction worker, all from one image. The app runs in production mode with secure cookies, which browsers accept on `localhost` but require HTTPS for elsewhere. Promote a user with `docker compose exec web node_modules/.bin/tsx scripts/set-role.ts <email> reviewer`. CI builds the image, runs the migrations and checks the running app on every push.
+
 ## Testing
 
 ```bash

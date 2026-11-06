@@ -1,0 +1,55 @@
+# PostgreSQL, a one-off migration step, the web app and the extraction worker.
+# LLM settings are read from the environment or from .env (LLM_BASE_URL, LLM_API_KEY, LLM_MODEL).
+x-app: &app
+  build: .
+  image: docextract:local
+  environment: &app-environment
+    DATABASE_URL: postgresql://postgres:postgres@db:5432/docextract
+    LOG_LEVEL: info
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: docextract
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "docextract"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    command: ["node_modules/.bin/drizzle-kit", "migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ["node_modules/.bin/tsx", "worker/index.ts"]
+    environment:
+      <<: *app-environment
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-20b}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  db-data:

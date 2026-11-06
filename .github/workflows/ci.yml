@@ -37,3 +37,28 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:integration
       - run: npm run build
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # The migration service runs once and exits, so readiness is polled instead of
+      # using --wait.
+      - name: Build the image, migrate, and start the web app and worker
+        run: |
+          docker compose up -d --build db web worker
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null http://127.0.0.1:3000/api/auth/me && break
+            sleep 2
+          done
+      - name: Check the running app
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/auth/me)" = "401"
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
+            -d '{"email":"ci@example.test","name":"CI","password":"correct horse battery staple"}' \
+            http://127.0.0.1:3000/api/auth/signup)
+          test "$status" = "201"
+          test "$(docker compose ps --all --format '{{.Service}} {{.ExitCode}}' | grep '^migrate ')" = "migrate 0"
+      - name: Container logs
+        if: always()
+        run: docker compose logs
