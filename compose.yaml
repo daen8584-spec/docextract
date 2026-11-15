@@ -6,6 +6,8 @@ x-app: &app
   environment: &app-environment
     DATABASE_URL: postgresql://postgres:postgres@db:5432/docextract
     LOG_LEVEL: info
+    # The image includes Tesseract, so scanned PDFs are accepted and read by the worker.
+    OCR_ENABLED: "true"
 
 services:
   db:

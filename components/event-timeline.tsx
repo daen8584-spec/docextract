@@ -13,6 +13,7 @@ const LABELS: Record<DocumentEventType, string> = {
   uploaded: "Uploaded",
   extraction_queued: "Extraction queued",
   extraction_started: "Extraction started",
+  ocr_completed: "Text read by OCR",
   extraction_succeeded: "Fields extracted",
   extraction_failed: "Extraction failed",
   approved: "Approved",
@@ -24,16 +25,25 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
 
 function EventDetails({ data }: { data: unknown }) {
   if (!data || typeof data !== "object") return null;
-  const { corrections, error, model, latencyMs, usage } = data as {
+  const { corrections, error, model, latencyMs, usage, meanConfidence, pages, lowConfidence } = data as {
     corrections?: FieldCorrection[];
     error?: string;
     model?: string;
     latencyMs?: number;
     usage?: { totalTokens: number } | null;
+    meanConfidence?: number;
+    pages?: number;
+    lowConfidence?: boolean;
   };
 
   return (
     <>
+      {meanConfidence !== undefined && (
+        <p className={`text-xs ${lowConfidence ? "text-amber-700" : "text-zinc-600"}`}>
+          {pages} {pages === 1 ? "page" : "pages"}, mean word confidence {meanConfidence}%
+          {lowConfidence ? " (low)" : ""}
+        </p>
+      )}
       {model && (
         <p className="text-xs text-zinc-600">
           {model} in {latencyMs} ms{usage ? `, ${usage.totalTokens} tokens` : ""}

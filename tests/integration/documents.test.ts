@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { POST as extractDocument } from "@/app/api/documents/[id]/extract/route";
 import { GET as getDocument, PATCH as reviewDocument } from "@/app/api/documents/[id]/route";
 import { GET as listDocuments, POST as uploadDocument } from "@/app/api/documents/route";
@@ -8,7 +8,7 @@ import { documentEvents, documents, jobs } from "@/db/schema";
 import { EXTRACTION_QUEUE } from "@/lib/extraction-job";
 import { enqueue } from "@/lib/queue";
 import type { InvoiceFields } from "@/lib/extract";
-import { makePdf } from "../fixtures/pdf";
+import { makePdf, makeScannedPdf } from "../fixtures/pdf";
 import { jsonRequest, routeParams, uploadRequest } from "./requests";
 import { createUser } from "./users";
 
@@ -139,6 +139,45 @@ describe("POST /api/documents", () => {
     const damaged = await upload("%PDF-1.4 truncated");
 
     expect([fake.status, scanned.status, damaged.status]).toEqual([415, 422, 422]);
+    expect(await db.select().from(documents)).toHaveLength(0);
+  });
+});
+
+describe("scanned PDF uploads with OCR enabled", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("stores a scanned PDF for OCR in the worker", async () => {
+    vi.stubEnv("OCR_ENABLED", "true");
+    const { cookie } = await createUser();
+    const scan = makeScannedPdf([["INVOICE INV-7"]], 72);
+
+    const res = await uploadDocument(uploadRequest("scan.pdf", scan, { cookie, type: "application/pdf" }), undefined);
+
+    expect(res.status).toBe(201);
+    const { id } = await res.json();
+    const [stored] = await db.select().from(documents).where(eq(documents.id, id));
+    expect(stored.content).toBe("");
+    expect(stored.originalPdf?.equals(Buffer.from(scan))).toBe(true);
+    const [event] = await db.select().from(documentEvents).where(eq(documentEvents.documentId, id));
+    expect(event.data).toMatchObject({ pages: 1, needsOcr: true });
+    expect(await db.select().from(jobs)).toHaveLength(1);
+
+    // The stored file is not sent to the browser with the document.
+    const detail = await getDocument(jsonRequest("GET", `/api/documents/${id}`, undefined, { cookie }), routeParams(id));
+    expect(await detail.json()).not.toHaveProperty("originalPdf");
+  });
+
+  it("rejects scanned PDFs with more pages than OCR reads", async () => {
+    vi.stubEnv("OCR_ENABLED", "true");
+    vi.stubEnv("OCR_MAX_PAGES", "2");
+    const { cookie } = await createUser();
+    const res = await uploadDocument(
+      uploadRequest("scan.pdf", makePdf([[], [], []]), { cookie, type: "application/pdf" }),
+      undefined,
+    );
+
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toContain("OCR is limited to 2 pages");
     expect(await db.select().from(documents)).toHaveLength(0);
   });
 });

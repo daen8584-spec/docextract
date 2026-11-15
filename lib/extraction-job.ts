@@ -1,9 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
-import { documentEvents, documents } from "../db/schema";
+import { documentEvents, documents, type OcrSummary } from "../db/schema";
 import { extractInvoice, type ExtractionResult } from "./extract";
 import { currentLogger } from "./logger";
+import { OcrError, ocrPdf, ocrSettings } from "./ocr";
 import { completeJob, type Job } from "./queue";
 import { errorMessage, type QueueHandler } from "./worker";
 
@@ -35,7 +36,7 @@ async function recordFailure(documentId: string, job: Job, error: string, toStat
 async function startExtraction(documentId: string, job: Job) {
   return db.transaction(async (tx) => {
     const [doc] = await tx
-      .select({ status: documents.status, content: documents.content })
+      .select({ status: documents.status, content: documents.content, originalPdf: documents.originalPdf })
       .from(documents)
       .where(eq(documents.id, documentId))
       .limit(1)
@@ -53,6 +54,37 @@ async function startExtraction(documentId: string, job: Job) {
     });
     return doc;
   });
+}
+
+/**
+ * Reads a scanned PDF with OCR and stores the text as the document content, clearing the
+ * stored PDF. This commits before extraction, so a retry after an extraction failure
+ * reuses the text instead of repeating OCR.
+ */
+async function runOcr(documentId: string, job: Job, pdf: Buffer): Promise<string> {
+  const settings = ocrSettings();
+  const started = performance.now();
+  const result = await ocrPdf(pdf, settings);
+  if (result.text.length === 0) throw new OcrError("OCR found no text in the document");
+  const summary: OcrSummary = {
+    pages: result.pages,
+    meanConfidence: Math.round(result.meanConfidence * 10) / 10,
+    lowConfidence: result.meanConfidence < settings.minConfidence,
+  };
+  await db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(documents)
+      .set({ content: result.text, originalPdf: null, ocr: summary })
+      .where(and(eq(documents.id, documentId), eq(documents.status, "processing")))
+      .returning({ id: documents.id });
+    if (!updated) return;
+    await tx.insert(documentEvents).values({
+      documentId,
+      type: "ocr_completed",
+      data: { jobId: job.id, ...summary, words: result.words, durationMs: Math.round(performance.now() - started) },
+    });
+  });
+  return result.text;
 }
 
 async function saveResult(documentId: string, job: Job, result: ExtractionResult) {
@@ -89,7 +121,8 @@ export const extractionHandler: QueueHandler = {
 
     let result: ExtractionResult;
     try {
-      result = await extractInvoice(doc.content);
+      const content = doc.originalPdf ? await runOcr(documentId, job, doc.originalPdf) : doc.content;
+      result = await extractInvoice(content);
     } catch (error) {
       // The final failure is recorded once, by onExhausted.
       if (job.attempts < job.maxAttempts) await recordFailure(documentId, job, errorMessage(error), "queued");

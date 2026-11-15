@@ -15,6 +15,10 @@ RUN DATABASE_URL=postgresql://build@127.0.0.1:5432/build npm run build
 FROM node:24-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+# OCR of scanned PDFs (docs/adr/0008): pdftoppm renders pages, Tesseract reads them.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /app ./
 USER node
 EXPOSE 3000

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db";
 import { documentEvents, documents, users } from "../db/schema";
@@ -7,7 +7,8 @@ import { AppError } from "./errors";
 import { type InvoiceFields, invoiceFields } from "./extract";
 import { EXTRACTION_QUEUE } from "./extraction-job";
 import { diffFields } from "./fields";
-import { extractPdfText } from "./pdf";
+import { ocrSettings } from "./ocr";
+import { readPdfText } from "./pdf";
 import { enqueue } from "./queue";
 
 /** Accepted content types and their size limits in bytes. */
@@ -54,10 +55,19 @@ export async function listDocuments(user: SessionUser, limit = 50) {
     .limit(limit);
 }
 
+function omit<T extends object, K extends keyof T>(value: T, key: K): Omit<T, K> {
+  const copy = { ...value };
+  delete copy[key];
+  return copy;
+}
+
+// Every column except the stored PDF, which can be megabytes and is only read by the worker.
+const detailColumns = omit(getTableColumns(documents), "originalPdf");
+
 /** Returns the document if it exists and the user may see it. Hidden documents are reported as not found. */
 export async function getDocument(user: SessionUser, id: string) {
   const [doc] = await db
-    .select()
+    .select(detailColumns)
     .from(documents)
     .where(and(eq(documents.id, id), visibleTo(user)))
     .limit(1);
@@ -83,12 +93,29 @@ export async function listDocumentEvents(user: SessionUser, id: string) {
     .orderBy(asc(documentEvents.createdAt));
 }
 
-/** The document text: the file itself for plain text, the extracted text layer for PDFs. */
-async function readContent(file: UploadedFile): Promise<{ content: string; pages?: number }> {
+/**
+ * The document text: the file itself for plain text, the text layer for PDFs. A PDF
+ * without a text layer is kept for OCR in the worker when OCR is enabled; its content
+ * stays empty until then.
+ */
+async function readContent(file: UploadedFile): Promise<{ content: string; pages?: number; originalPdf?: Buffer }> {
   if (file.type === "application/pdf") {
-    const { text, pages } = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+    const bytes = new Uint8Array(await file.arrayBuffer());
     // PostgreSQL text cannot hold NUL, and in a PDF text layer it carries no meaning.
-    return { content: text.replaceAll("\u0000", ""), pages };
+    const { text, pages } = await readPdfText(bytes);
+    const content = text.replaceAll("\u0000", "");
+    if (content.length > 0) return { content, pages };
+    const ocr = ocrSettings();
+    if (!ocr.enabled) {
+      throw new AppError(
+        "UNPROCESSABLE_CONTENT",
+        "The PDF has no text layer. Scanned documents are not supported; upload a PDF with selectable text.",
+      );
+    }
+    if (pages > ocr.maxPages) {
+      throw new AppError("PAYLOAD_TOO_LARGE", `Scanned PDF has ${pages} pages; OCR is limited to ${ocr.maxPages} pages`);
+    }
+    return { content: "", pages, originalPdf: Buffer.from(bytes) };
   }
   const content = await file.text();
   if (content.includes("\u0000")) {
@@ -109,14 +136,14 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
   if (file.size > limit) {
     throw new AppError("PAYLOAD_TOO_LARGE", `File exceeds ${limit / 1_000_000} MB`);
   }
-  const { content, pages } = await readContent(file);
+  const { content, pages, originalPdf } = await readContent(file);
 
   // The document, its audit event and its extraction job are created atomically,
   // so a document can never exist without the job that will process it.
   return db.transaction(async (tx) => {
     const [doc] = await tx
       .insert(documents)
-      .values({ filename: cleanFilename(file.name), mimeType: file.type, content, uploadedBy: user.id })
+      .values({ filename: cleanFilename(file.name), mimeType: file.type, content, originalPdf, uploadedBy: user.id })
       .returning(summaryColumns);
     const jobId = await enqueue(tx, EXTRACTION_QUEUE, { documentId: doc.id }, { dedupeKey: doc.id });
     await tx.insert(documentEvents).values({
@@ -124,7 +151,13 @@ export async function createDocument(user: SessionUser, file: UploadedFile) {
       actorId: user.id,
       type: "uploaded",
       toStatus: doc.status,
-      data: { filename: cleanFilename(file.name), sizeBytes: file.size, jobId, ...(pages === undefined ? {} : { pages }) },
+      data: {
+        filename: cleanFilename(file.name),
+        sizeBytes: file.size,
+        jobId,
+        ...(pages === undefined ? {} : { pages }),
+        ...(originalPdf ? { needsOcr: true } : {}),
+      },
     });
     return doc;
   });

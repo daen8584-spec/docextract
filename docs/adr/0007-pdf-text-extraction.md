@@ -1,6 +1,6 @@
 # 0007. Extract the PDF text layer at upload time
 
-- Status: Accepted
+- Status: Accepted, amended by [0008](0008-ocr-for-scanned-pdfs.md) for scanned PDFs
 - Date: 2026-11-05
 
 ## Context
