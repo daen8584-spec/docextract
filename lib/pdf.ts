@@ -9,10 +9,10 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
 }
 
 /**
- * Extracts the text layer of a PDF with PDF.js. Scanned documents have no text layer
- * and are rejected rather than stored empty, because extraction would only fail later.
+ * Reads the text layer of a PDF with PDF.js. The text is empty for scanned documents,
+ * which have no text layer.
  */
-export async function extractPdfText(bytes: Uint8Array): Promise<{ text: string; pages: number }> {
+export async function readPdfText(bytes: Uint8Array): Promise<{ text: string; pages: number }> {
   if (!looksLikePdf(bytes)) {
     throw new AppError("UNSUPPORTED_MEDIA_TYPE", "File content is not a PDF");
   }
@@ -28,11 +28,20 @@ export async function extractPdfText(bytes: Uint8Array): Promise<{ text: string;
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  if (normalized.length === 0) {
+  return { text: normalized, pages: pdf.numPages };
+}
+
+/**
+ * Extracts the text layer of a PDF. Scanned documents have no text layer and are
+ * rejected rather than stored empty, because extraction would only fail later.
+ */
+export async function extractPdfText(bytes: Uint8Array): Promise<{ text: string; pages: number }> {
+  const result = await readPdfText(bytes);
+  if (result.text.length === 0) {
     throw new AppError(
       "UNPROCESSABLE_CONTENT",
       "The PDF has no text layer. Scanned documents are not supported; upload a PDF with selectable text.",
     );
   }
-  return { text: normalized, pages: pdf.numPages };
+  return result;
 }

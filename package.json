@@ -16,6 +16,7 @@
     "db:migrate": "drizzle-kit migrate",
     "user:role": "tsx scripts/set-role.ts",
     "eval": "LOG_LEVEL=warn tsx scripts/eval.ts",
+    "eval:ocr": "tsx scripts/ocr-fidelity.ts",
     "eval:export": "tsx scripts/export-reviewed.ts"
   },
   "dependencies": {

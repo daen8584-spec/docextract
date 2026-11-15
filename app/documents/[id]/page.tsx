@@ -50,6 +50,22 @@ async function DocumentDetail({ params }: Props) {
         <div className="grid gap-6 md:grid-cols-2">
           <section className="flex flex-col gap-2">
             <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Source</h2>
+            {doc.ocr && (
+              <p
+                className={`rounded-lg border p-3 text-sm ${
+                  doc.ocr.lowConfidence
+                    ? "border-amber-300 bg-amber-50 text-amber-900"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-700"
+                }`}
+              >
+                {doc.ocr.lowConfidence
+                  ? `Read by OCR with low confidence (${doc.ocr.meanConfidence}%). Check every field against the original document.`
+                  : `Read by OCR from a scanned PDF (mean word confidence ${doc.ocr.meanConfidence}%).`}
+              </p>
+            )}
+            {doc.content === "" && doc.status !== "failed" && (
+              <p className="text-sm text-zinc-600">Scanned PDF: the text appears here once OCR has read it.</p>
+            )}
             <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-zinc-200 bg-white p-4 text-sm text-zinc-800">
               {doc.content}
             </pre>

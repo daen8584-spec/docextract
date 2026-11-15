@@ -13,7 +13,7 @@ DocExtract treats model output as untrusted input. Every response is validated a
 - **Human review** with field-level corrections and atomic, race-free status transitions
 - **Authentication and authorization** with server-side sessions, three roles and object-level access control
 - **Rate limiting** of login, signup and upload with token buckets in PostgreSQL, consistent across instances
-- **PDF support** through the PDF.js text layer, with clear errors for scanned, damaged and oversized files
+- **PDF support** through the PDF.js text layer, and **OCR of scanned PDFs** with Tesseract in the worker, with the OCR confidence shown to the reviewer
 - **Audit log** of every state change, including who changed what and the reviewer's corrections
 - **Evaluation harness** reporting per-field accuracy, missing values and hallucinations across a test dataset
 - **Observability** through structured JSON logs, request ids, and LLM latency and token usage per extraction
@@ -63,6 +63,7 @@ Significant decisions are documented as [Architecture Decision Records](docs/adr
 - [0005](docs/adr/0005-untrusted-llm-output.md) Validation, human review and evaluation for LLM output
 - [0006](docs/adr/0006-rate-limiting-in-postgresql.md) Token bucket rate limiting in PostgreSQL
 - [0007](docs/adr/0007-pdf-text-extraction.md) PDF text extraction at upload time
+- [0008](docs/adr/0008-ocr-for-scanned-pdfs.md) OCR of scanned PDFs with Tesseract in the worker, and how its settings were chosen
 
 ## Roles
 
@@ -86,7 +87,7 @@ Login, signup and upload are rate limited (see [0006](docs/adr/0006-rate-limitin
 | `POST` | `/api/auth/login` | Public | Start a session |
 | `POST` | `/api/auth/logout` | Public | End the current session, if any, and clear the cookie |
 | `GET` | `/api/auth/me` | Authenticated | Current user |
-| `POST` | `/api/documents` | Authenticated | Upload a document (`multipart/form-data`, field `file`): UTF-8 text up to 1 MB or a PDF with a text layer up to 10 MB and 50 pages. A larger request body is refused with `413` before it is read into memory. Queues extraction |
+| `POST` | `/api/documents` | Authenticated | Upload a document (`multipart/form-data`, field `file`): UTF-8 text up to 1 MB, or a PDF up to 10 MB and 50 pages; a scanned PDF without a text layer is accepted for OCR when `OCR_ENABLED=true`, up to `OCR_MAX_PAGES` pages. A larger request body is refused with `413` before it is read into memory. Queues extraction |
 | `GET` | `/api/documents` | Authenticated | List up to 50 visible documents, newest first |
 | `GET` | `/api/documents/:id` | Authenticated | Document with its extracted fields |
 | `GET` | `/api/documents/:id/events` | Authenticated | Audit history of the document |
@@ -119,6 +120,18 @@ npm run worker
 ```
 
 Open http://localhost:3000, create an account, promote it with `npm run user:role -- <email> reviewer`, and upload `eval/cases/01-simple.txt`.
+
+To accept scanned PDFs, install Tesseract and poppler-utils (`apt install tesseract-ocr poppler-utils`, or `brew install tesseract poppler`) and set `OCR_ENABLED=true` for both processes. The container image includes them and enables OCR.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OCR_ENABLED` | `false` | Accept PDFs without a text layer and read them with OCR in the worker |
+| `OCR_MAX_PAGES` | `10` | Scanned PDFs with more pages are rejected at upload |
+| `OCR_DPI` | `300` | Resolution at which pages are rendered for OCR |
+| `OCR_PSM` | `6` | Tesseract page segmentation mode; `4` may suit multi-column layouts better |
+| `OCR_LANGUAGE` | `eng` | Tesseract language data, which must be installed |
+| `OCR_MIN_CONFIDENCE` | `60` | Below this mean word confidence the reviewer is warned |
+| `OCR_PAGE_TIMEOUT_MS` | `60000` | Time limit for reading one page |
 
 ### With Docker
 
@@ -168,6 +181,17 @@ Measured on 2026-11-05 through the Groq API, across all 20 cases:
 
 The model extracted every field correctly, including the ten failure-mode cases. The dataset is synthetic and every case has a single unambiguous answer, so a perfect score shows that the pipeline handles these layouts. It does not establish accuracy on real documents. The dataset's main role is regression testing: a prompt, model or provider change should not lower this score. Accuracy on real documents is measured through reviewer corrections, which `npm run eval:export` turns into additional cases. Latency is measured at the client and includes the network round trip.
 
+### OCR of scanned PDFs
+
+`npm run eval:ocr` renders each case as a scanned PDF, an image-only PDF without a text layer, reads it back with the OCR pipeline the worker uses, and compares the text with the original. It needs no LLM. 16 of the 20 cases are used; the four with non-ASCII characters are skipped because the test PDF generator writes ASCII only.
+
+| Scan resolution | Character error rate | Cases recovered exactly | Mean word confidence | OCR time per page |
+| ---: | ---: | ---: | ---: | ---: |
+| 150 dpi | 0.40% | 14 of 16 | 94.8 | 1.0 s |
+| 300 dpi | 0.54% | 14 of 16 | 94.5 | 1.1 s |
+
+With Tesseract's default settings the first run lost the `TOTAL DUE` line of one case and turned the apostrophe in a Swiss amount (`12'463.93`) into a typographic one, at a character error rate of 1.9 to 2.3%. A different page segmentation mode and quote normalization fixed both; see [0008](docs/adr/0008-ocr-for-scanned-pdfs.md). The remaining errors are in a case whose original deliberately contains OCR-like noise, and a stray `°` in one Swiss total, which the reviewer's check exists to catch. These are clean renderings, not real scans: skew, noise and multi-column layouts will do worse, and field accuracy after OCR has not been measured with a model.
+
 ## Observability
 
 Logs are structured JSON on stdout. Every API request logs its method, path, status and duration under a request id, which is also returned in the `x-request-id` response header. Worker logs carry the job id and attempt number. Each successful extraction records the model, latency and token usage in the audit log.
@@ -181,14 +205,13 @@ db/             Schema and SQL migrations
 docs/adr/       Architecture Decision Records
 eval/cases/     Evaluation dataset
 lib/            Domain logic: auth, documents, extraction, queue, worker, evaluation
-scripts/        Command-line tools (roles, evaluation)
-tests/          Integration tests
+scripts/        Command-line tools (roles, evaluation, OCR measurement)
+tests/          Integration tests and fixtures, including scanned PDFs
 worker/         Background worker entry point
 ```
 
 ## Roadmap
 
-- OCR for scanned PDFs
 - Confidence scores and highlighting of uncertain fields
 - `LISTEN/NOTIFY` to start jobs without polling delay
 

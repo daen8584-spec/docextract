@@ -32,6 +32,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The OCR tests run Tesseract and pdftoppm.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
@@ -59,6 +61,26 @@ jobs:
             http://127.0.0.1:3000/api/auth/signup)
           test "$status" = "201"
           test "$(docker compose ps --all --format '{{.Service}} {{.ExitCode}}' | grep '^migrate ')" = "migrate 0"
+      # Checks that the image's Tesseract and pdftoppm work: the worker reads the text of
+      # a scanned PDF before extraction. Extraction itself fails here without an LLM key.
+      - name: Read a scanned PDF with OCR in the worker container
+        run: |
+          curl -s -D headers.txt -o /dev/null -H 'content-type: application/json' \
+            -d '{"email":"ocr@example.test","name":"OCR","password":"correct horse battery staple"}' \
+            http://127.0.0.1:3000/api/auth/signup
+          # The session cookie is Secure in production, so curl would not send it over
+          # HTTP from a cookie jar; it is passed as a header instead.
+          cookie=$(grep -i '^set-cookie:' headers.txt | head -1 | sed -E 's/^[^:]+: *([^;]+).*/\1/')
+          id=$(curl -s -H "cookie: $cookie" -F "file=@tests/fixtures/scanned-invoice.pdf;type=application/pdf" \
+            http://127.0.0.1:3000/api/documents | jq -r .id)
+          content=""
+          for i in $(seq 1 60); do
+            content=$(curl -s -H "cookie: $cookie" "http://127.0.0.1:3000/api/documents/$id" | jq -r .content)
+            echo "$content" | grep -q "INV-2042" && break
+            sleep 2
+          done
+          echo "$content"
+          echo "$content" | grep -q "Total due: 1,250.00 USD"
       - name: Container logs
         if: always()
         run: docker compose logs

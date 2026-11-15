@@ -1,11 +1,12 @@
 import { eq, sql } from "drizzle-orm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { documentEvents, documents, jobs } from "@/db/schema";
 import { ExtractionError, extractInvoice } from "@/lib/extract";
 import { EXTRACTION_QUEUE, extractionHandler } from "@/lib/extraction-job";
 import { claimJob, enqueue } from "@/lib/queue";
 import { processNext } from "@/lib/worker";
+import { makeScannedPdf } from "../fixtures/pdf";
 
 vi.mock("@/lib/extract", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/extract")>();
@@ -134,5 +135,85 @@ describe("extraction worker", () => {
     expect(extractInvoice).not.toHaveBeenCalled();
     expect((await documentState(doc.id)).status).toBe("rejected");
     expect((await db.select().from(jobs))[0].status).toBe("succeeded");
+  });
+});
+
+describe("OCR of scanned PDFs", () => {
+  const SCAN = makeScannedPdf([["INVOICE INV-2042", "Vendor: Acme Supplies"], ["Total due: 1,250.00 USD"]]);
+
+  async function scannedDocument(maxAttempts = 3) {
+    const [doc] = await db
+      .insert(documents)
+      .values({ filename: "scan.pdf", mimeType: "application/pdf", content: "", originalPdf: Buffer.from(SCAN) })
+      .returning();
+    await enqueue(db, EXTRACTION_QUEUE, { documentId: doc.id }, { dedupeKey: doc.id, maxAttempts });
+    return doc;
+  }
+
+  const stored = async (id: string) => (await db.select().from(documents).where(eq(documents.id, id)))[0];
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("reads the text with OCR, stores it and extracts from it", async () => {
+    vi.mocked(extractInvoice).mockResolvedValue({ fields: FIELDS, model: "test-model", latencyMs: 5, usage: null });
+    const doc = await scannedDocument();
+
+    await runWorkerOnce();
+
+    const after = await stored(doc.id);
+    expect(after.status).toBe("extracted");
+    expect(after.content).toBe("INVOICE INV-2042\nVendor: Acme Supplies\n\nTotal due: 1,250.00 USD");
+    expect(after.originalPdf).toBeNull();
+    expect(after.ocr).toMatchObject({ pages: 2, lowConfidence: false });
+    expect(after.ocr!.meanConfidence).toBeGreaterThan(80);
+    expect(vi.mocked(extractInvoice)).toHaveBeenCalledWith(after.content);
+    expect(await eventTypes(doc.id)).toEqual(["extraction_started", "ocr_completed", "extraction_succeeded"]);
+    const [ocrEvent] = await db.select().from(documentEvents).where(eq(documentEvents.type, "ocr_completed"));
+    expect(ocrEvent.data).toMatchObject({ pages: 2, words: 9 });
+  });
+
+  it("keeps the OCR text when extraction fails, so a retry does not repeat OCR", async () => {
+    vi.mocked(extractInvoice)
+      .mockRejectedValueOnce(new ExtractionError("LLM returned HTTP 503"))
+      .mockResolvedValueOnce({ fields: FIELDS, model: "test-model", latencyMs: 5, usage: null });
+    const doc = await scannedDocument();
+
+    await runWorkerOnce();
+    expect((await stored(doc.id)).content).toContain("INV-2042");
+    await makeRetryDue();
+    await runWorkerOnce();
+
+    expect((await stored(doc.id)).status).toBe("extracted");
+    expect(await eventTypes(doc.id)).toEqual([
+      "extraction_started",
+      "ocr_completed",
+      "extraction_failed",
+      "extraction_started",
+      "extraction_succeeded",
+    ]);
+  });
+
+  it("flags text read with low confidence", async () => {
+    vi.stubEnv("OCR_MIN_CONFIDENCE", "101");
+    vi.mocked(extractInvoice).mockResolvedValue({ fields: FIELDS, model: "test-model", latencyMs: 5, usage: null });
+    const doc = await scannedDocument();
+
+    await runWorkerOnce();
+
+    expect((await stored(doc.id)).ocr).toMatchObject({ lowConfidence: true });
+  });
+
+  it("records an OCR failure like an extraction failure and keeps the PDF for the retry", async () => {
+    vi.stubEnv("PATH", "/nonexistent");
+    const doc = await scannedDocument();
+
+    await runWorkerOnce();
+
+    const after = await stored(doc.id);
+    expect(after.status).toBe("queued");
+    expect(after.originalPdf).not.toBeNull();
+    expect(extractInvoice).not.toHaveBeenCalled();
+    const [failure] = await db.select().from(documentEvents).where(eq(documentEvents.type, "extraction_failed"));
+    expect(failure.data).toMatchObject({ willRetry: true, error: expect.stringContaining("pdftoppm is not installed") });
   });
 });

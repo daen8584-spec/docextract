@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  customType,
   doublePrecision,
   index,
   integer,
@@ -12,12 +13,16 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () =>
   timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
     .$onUpdate(() => new Date());
+
+export type OcrSummary = { pages: number; meanConfidence: number; lowConfidence: boolean };
 
 export const userRole = pgEnum("user_role", ["uploader", "reviewer", "admin"]);
 
@@ -61,6 +66,10 @@ export const documents = pgTable(
     content: text("content").notNull(),
     status: documentStatus("status").notNull().default("queued"),
     extracted: jsonb("extracted"),
+    // A scanned PDF awaiting OCR in the worker; cleared once its text is in `content`.
+    originalPdf: bytea("original_pdf"),
+    // Pages and mean word confidence of the OCR that produced `content`, if any.
+    ocr: jsonb("ocr").$type<OcrSummary>(),
     uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -72,6 +81,7 @@ export const documentEventType = pgEnum("document_event_type", [
   "uploaded",
   "extraction_queued",
   "extraction_started",
+  "ocr_completed",
   "extraction_succeeded",
   "extraction_failed",
   "approved",
